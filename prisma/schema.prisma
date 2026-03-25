@@ -1,0 +1,395 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  image         String?
+  emailVerified DateTime?
+  profile       Profile?
+  accounts      Account[]
+  sessions      Session[]
+  shops         Shop[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  staff         Staff?
+}
+
+model Profile {
+  userId      String   @id
+  role        String   @default("user")
+  designation String?
+  shopId      String?
+  email       String?
+  fullName    String?
+  contact1    String?
+  contact2    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shop        Shop?    @relation(fields: [shopId], references: [id], onDelete: Cascade)
+}
+
+model Account {
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+
+  refresh_token String?
+  access_token  String?
+  expires_at    Int?
+  token_type    String?
+  scope         String?
+  id_token      String?
+  session_state String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([provider, providerAccountId])
+}
+
+model Session {
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@id([identifier, token])
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String
+  description String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Shop {
+  id           String        @id @default(cuid())
+  name         String
+  tel          String
+  location     String
+  profile      Profile[]
+  userId       String
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  products     Product[]
+  staffs       Staff[]
+  advances     Advance[]
+  salaries     Salary[]
+  payrolls     Payroll[]
+  suppliers    Supplier[]
+  buys         Buy[]
+  assets       Asset[]
+  adjustments  Adjustment[]
+  sales        Sale[]
+  quotes       Quote[]
+  expenses     Expense[]
+  credits      Credit[]
+  payments     Payment[]
+  receipts     Receipt[]
+  wallet       Wallet?
+  transactions Transaction[]
+  margins      Margin[]
+}
+
+model Category {
+  id            String        @id @default(cuid())
+  name          String        @unique
+  subCategories SubCategory[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+}
+
+model SubCategory {
+  id         String    @id @default(cuid())
+  name       String    @unique
+  categoryId String
+  category   Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  products   Product[]
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+}
+
+model Product {
+  id              String       @id @default(cuid())
+  productName     String
+  serialNo        String?
+  quantity        Int          @default(0)
+  outOfStockLimit Int          @default(5)
+  buyingPrice     Int          @default(0)
+  sellingPrice    Int          @default(0)
+  discount        Int          @default(0)
+  imageUrl        String?
+  subCategoryId   String
+  subCategory     SubCategory  @relation(fields: [subCategoryId], references: [id])
+  shopId          String
+  shop            Shop         @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  adjustments     Adjustment[]
+  saleItems       SaleItem[]
+  quoteItems      QuoteItem[]
+}
+
+model Staff {
+  id         String    @id @default(cuid())
+  userId     String    @unique
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fullName   String
+  tel1       String
+  tel2       String?
+  mpesaNo    String?
+  baseSalary Int       @default(0)
+  shopId     String
+  shop       Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  advances   Advance[]
+  salaries   Salary[]
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  payrolls   Payroll[]
+}
+
+model Advance {
+  id              String   @id @default(cuid())
+  staffId         String
+  staff           Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  amount          Int
+  date            DateTime
+  reason          String?
+  status          String   @default("requested")
+  transactionCode String?
+  shopId          String
+  shop            Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Salary {
+  id        String   @id @default(cuid())
+  staffId   String
+  staff     Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  amount    Int
+  month     String
+  status    String   @default("pending")
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Payroll {
+  id        String   @id @default(cuid())
+  staffId   String
+  staff     Staff    @relation(fields: [staffId], references: [id])
+  salary    Int
+  payable   Int
+  status    String   @default("pending")
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Supplier {
+  id        String   @id @default(cuid())
+  name      String
+  contact1  String
+  contact2  String?
+  goodsType String?
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  purchases Buy[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Buy {
+  id            String   @id @default(cuid())
+  supplierId    String
+  supplier      Supplier @relation(fields: [supplierId], references: [id])
+  itemsJson     String
+  totalAmount   Int
+  transportCost Int      @default(0)
+  status        String   @default("pending")
+  shopId        String
+  shop          Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Asset {
+  id        String   @id @default(cuid())
+  itemName  String
+  imageUrl  String?
+  cost      Int      @default(0)
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Adjustment {
+  id            String   @id @default(cuid())
+  productId     String
+  product       Product  @relation(fields: [productId], references: [id])
+  adjustType    String
+  quantity      Int
+  originalStock Int?
+  newStockQty   Int?
+  value         Int?
+  adjustedBy    String
+  shopId        String
+  shop          Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Sale {
+  id            String     @id @default(cuid())
+  soldById      String
+  itemsJson     String
+  totalAmount   Int
+  paymentMethod String
+  shopId        String
+  shop          Shop       @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  saleItems     SaleItem[]
+}
+
+model Quote {
+  id              String      @id @default(cuid())
+  soldById        String
+  productIds      String[]
+  amount          Int
+  shopId          String
+  quoteItems      QuoteItem[]
+  itemsJson       String
+  customerName    String      @default("")
+  customerContact String      @default("")
+  shop            Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+}
+
+model QuoteItem {
+  id        String  @id @default(cuid())
+  quoteId   String
+  quote     Quote   @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Int
+  price     Float
+  discount  Float   @default(0)
+}
+
+model Expense {
+  id          String   @id @default(cuid())
+  description String
+  amount      Int
+  category    String?
+  paidById    String
+  shopId      String
+  shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Credit {
+  id          String    @id @default(cuid())
+  amount      Int
+  downPayment Int       @default(0)
+  dueDate     DateTime?
+  status      String    @default("pending")
+  shopId      String
+  shop        Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model Payment {
+  id              String   @id @default(cuid())
+  amount          Int
+  method          String
+  transactionCode String?
+  shopId          String
+  shop            Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Receipt {
+  id        String   @id @default(cuid())
+  no        Int      @unique
+  amount    Int
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+}
+
+model Wallet {
+  id        String   @id @default(cuid())
+  balance   Int      @default(0)
+  shopId    String   @unique
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Transaction {
+  id            String   @id @default(cuid())
+  name          String
+  amount        Int
+  sourceOfMoney String
+  authorizeId   String
+  shopId        String
+  shop          Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Margin {
+  id         String   @id @default(cuid())
+  date       DateTime
+  value      Int
+  profitType String?
+  shopId     String
+  shop       Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model SaleItem {
+  id        String  @id @default(cuid())
+  saleId    String
+  sale      Sale    @relation(fields: [saleId], references: [id])
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Int
+  price     Int
+  discount  Int     @default(0)
+}
