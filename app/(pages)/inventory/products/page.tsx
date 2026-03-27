@@ -1,38 +1,40 @@
 // app/inventory/products/page.tsx
 import { auth } from "@/auth";
+import { redirect } from "next/navigation";
 import prisma from "@/lib/prisma";
+import { resolveActiveShop } from "@/lib/active-shop";
 import ProductsView from "./_components/ProductsClient";
 
-export const revalidate = 1;
+export const revalidate = 0;
 
 export default async function ProductsPage() {
   const session = await auth();
-  if (!session?.user?.id) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <p className="text-lg text-gray-600">Please sign in to access inventory</p>
-      </div>
-    );
-  }
+  if (!session?.user?.id) redirect("/login");
 
-  const userId = session.user.id;
-  const profile = await prisma.profile.findUnique({
-    where: { userId },
-    select: { role: true },
+  const { activeShopId, activeShop, isStaff, isAdmin } = await resolveActiveShop(
+    session.user.id
+  );
+
+  // ── Find the owner of the active shop ────────────────────────────────────
+  // Staff and admin see all products owned by that shop owner for reference.
+  const shopOwner = await prisma.shop.findUnique({
+    where: { id: activeShopId },
+    select: { userId: true },
   });
-  const isAdmin = profile?.role?.toLowerCase().trim() === "admin";
 
-  const stats = {
-    totalProducts: 123,
-    productValue: 1256200,
-    totalSold: 456,
-    totalReturned: 3,
-    outOfStock: 6,
-    slowSelling: 5,
-  };
+  // All shops belonging to the same owner (so we can show their full catalogue)
+  const ownerShopIds = shopOwner
+    ? (
+        await prisma.shop.findMany({
+          where: { userId: shopOwner.userId },
+          select: { id: true },
+        })
+      ).map((s) => s.id)
+    : [activeShopId];
 
-  const products = await prisma.product.findMany({
-    where: isAdmin ? undefined : { shop: { userId } },
+  // ── ALL products across owner shops — for reference catalogue ─────────────
+  const allProducts = await prisma.product.findMany({
+    where: { shopId: { in: ownerShopIds } },
     select: {
       id: true,
       productName: true,
@@ -42,7 +44,8 @@ export default async function ProductsPage() {
       discount: true,
       quantity: true,
       buyingPrice: true,
-      outOfStockLimit: true,           // ← THIS WAS MISSING (root cause)
+      outOfStockLimit: true,
+      shopId: true,
       subCategory: {
         select: {
           id: true,
@@ -50,11 +53,42 @@ export default async function ProductsPage() {
           category: { select: { id: true, name: true } },
         },
       },
-      shop: { select: { name: true } },
+      shop: { select: { id: true, name: true, location: true } },
     },
-    orderBy: { createdAt: "desc" },
+    orderBy: [
+      // Active shop products first
+      { shopId: "asc" },
+      { createdAt: "desc" },
+    ],
   });
 
+  // ── Stats — only for the active shop ─────────────────────────────────────
+  const activeProducts = allProducts.filter((p) => p.shopId === activeShopId);
+
+  const totalProducts = activeProducts.length;
+  const productValue = activeProducts.reduce(
+    (sum, p) => sum + p.buyingPrice * p.quantity,
+    0
+  );
+
+  const soldAgg = await prisma.saleItem.aggregate({
+    where: { sale: { shopId: activeShopId } },
+    _sum: { quantity: true },
+  });
+  const totalSold = soldAgg._sum.quantity ?? 0;
+
+  const returnedAgg = await prisma.returnItem.aggregate({
+    where: { return: { shopId: activeShopId } },
+    _sum: { quantity: true },
+  });
+  const totalReturned = returnedAgg._sum.quantity ?? 0;
+
+  const outOfStock = activeProducts.filter((p) => p.quantity === 0).length;
+  const slowSelling = activeProducts.filter(
+    (p) => p.quantity > 0 && p.quantity <= p.outOfStockLimit
+  ).length;
+
+  // ── Categories & subcategories ────────────────────────────────────────────
   const categories = await prisma.category.findMany({
     select: { id: true, name: true },
     orderBy: { name: "asc" },
@@ -72,8 +106,19 @@ export default async function ProductsPage() {
 
   return (
     <ProductsView
-      stats={stats}
-      products={products.map((p) => ({
+      activeShop={activeShop}
+      activeShopId={activeShopId}
+      isStaff={isStaff}
+      isAdmin={isAdmin}
+      stats={{
+        totalProducts,
+        productValue,
+        totalSold,
+        totalReturned,
+        outOfStock,
+        slowSelling,
+      }}
+      products={allProducts.map((p) => ({
         id: p.id,
         name: p.productName,
         serialNo: p.serialNo ?? "",
@@ -83,11 +128,14 @@ export default async function ProductsPage() {
         price: p.sellingPrice,
         discount: p.discount ?? 0,
         quantity: p.quantity,
-        shop: p.shop?.name ?? "—",
+        shopId: p.shopId,
+        shopName: p.shop?.name ?? "—",
+        shopLocation: p.shop?.location ?? "",
         buyingPrice: p.buyingPrice,
         subCategoryId: p.subCategory?.id ?? "",
         categoryId: p.subCategory?.category?.id ?? "",
-        outOfStockLimit: p.outOfStockLimit,     // ← THIS WAS MISSING
+        outOfStockLimit: p.outOfStockLimit,
+        isOwnShop: p.shopId === activeShopId,
       }))}
       categories={categories}
       subCategories={subCategories}

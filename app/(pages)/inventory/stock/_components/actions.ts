@@ -29,9 +29,13 @@ export async function saveAdjustmentAction(
 
   const isAdmin = profile?.role?.toLowerCase().trim() === "admin";
 
-  const resolvedShopId =
-    profile?.shopId ??
-    (isAdmin ? formData.get("shopId")?.toString() ?? "" : "");
+  // ── Use the activeShopId passed from the form (set by the page) ──────────
+  // Staff and owners always use the active shop (locked server-side too).
+  // Admin may pass any shopId via form.
+  const formShopId = formData.get("shopId")?.toString() ?? "";
+
+  // Non-admin: always enforce their own shop, ignore whatever form sends
+  const resolvedShopId = isAdmin ? formShopId : (profile?.shopId ?? "");
 
   if (!resolvedShopId)
     return { success: false, error: "Shop not assigned. Please contact administrator." };
@@ -48,12 +52,16 @@ export async function saveAdjustmentAction(
   try {
     const validated = adjustSchema.parse(raw);
 
+    // ── Verify the product belongs to the target shop ────────────────────
     const product = await prisma.product.findUnique({
       where: { id: validated.productId },
-      select: { quantity: true, sellingPrice: true },
+      select: { quantity: true, sellingPrice: true, shopId: true },
     });
 
     if (!product) return { success: false, error: "Product not found" };
+
+    if (product.shopId !== validated.shopId)
+      return { success: false, error: "Product does not belong to the selected shop" };
 
     const originalStock = product.quantity;
     let newStockQty = originalStock;
@@ -96,7 +104,22 @@ export async function saveAdjustmentAction(
 export async function deleteAdjustmentAction(id: string): Promise<ActionResult> {
   const session = await auth();
   if (!session?.user?.id) return { success: false, error: "Unauthorized" };
+
+  const isAdmin =
+    (await prisma.profile.findUnique({
+      where: { userId: session.user.id },
+      select: { role: true },
+    }))?.role?.toLowerCase().trim() === "admin";
+
   try {
+    const existing = await prisma.adjustment.findUnique({
+      where: { id },
+      select: { shop: { select: { userId: true } } },
+    });
+    if (!existing) return { success: false, error: "Adjustment not found" };
+    if (!isAdmin && existing.shop.userId !== session.user.id)
+      return { success: false, error: "Not authorized to delete this adjustment" };
+
     await prisma.adjustment.delete({ where: { id } });
     revalidatePath("/inventory/adjustStock");
     return { success: true };

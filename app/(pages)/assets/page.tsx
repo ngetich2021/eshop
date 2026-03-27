@@ -1,21 +1,18 @@
 // app/assets/page.tsx
 import { auth } from "@/auth";
+import { redirect } from "next/navigation";
 import prisma from "@/lib/prisma";
+import { resolveActiveShop } from "@/lib/active-shop";
 import AssetsView from "./_components/AssetsView";
 
 export default async function AssetsPage() {
   const session = await auth();
-  if (!session?.user?.id)
-    return <div className="min-h-screen flex items-center justify-center">Please sign in</div>;
+  if (!session?.user?.id) redirect("/login");
 
-  const userId = session.user.id;
-  const profile = await prisma.profile.findUnique({ where: { userId }, select: { role: true } });
-  const isAdmin = profile?.role?.toLowerCase().trim() === "admin";
-
-  const shops = await prisma.shop.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } });
+  const { activeShopId, activeShop, isStaff, isAdmin } = await resolveActiveShop(session.user.id);
 
   const raw = await prisma.asset.findMany({
-    where: isAdmin ? undefined : { shop: { userId } },
+    where: { shopId: activeShopId },
     select: {
       id: true,
       itemName: true,
@@ -42,9 +39,10 @@ export default async function AssetsPage() {
 
   return (
     <AssetsView
+      activeShop={activeShop}
       stats={{ totalAssets: assets.length, totalValue: totalCost }}
       assets={assets}
-      shops={shops}
+      shopId={activeShopId}
     />
   );
 }

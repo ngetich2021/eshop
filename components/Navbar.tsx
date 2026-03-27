@@ -59,7 +59,7 @@ const NavLinks = [
     icon: <SiAwssecretsmanager size={32} />,
     submenu: [
       { title: "staff", href: "/hr/staff" },
-      { title: "payrol", href: "/hr/payrol" },
+      { title: "payroll", href: "/hr/payrol" },
       { title: "advance", href: "/hr/advance" },
       { title: "salary", href: "/hr/salary" },
     ],

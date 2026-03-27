@@ -1,13 +1,11 @@
-// app/suppliers/_components/SupplierFormSideSheet.tsx
 "use client";
 
-import { ArrowLeft, Loader2, Eye } from "lucide-react";
-import { useRef, useEffect } from "react";
-import { useActionState } from "react";
+import { ArrowLeft, Loader2, Eye, Store, Phone, Box } from "lucide-react";
+import { useRef, useEffect, useActionState } from "react";
 import { saveSupplierAction } from "./actions";
 
+
 type ActionResult = { success: boolean; error?: string };
-type ShopOption = { id: string; name: string };
 
 type SupplierToEdit = {
   id: string;
@@ -15,86 +13,92 @@ type SupplierToEdit = {
   contact1: string;
   contact2: string | null;
   goodsType: string | null;
-  shopId: string;
 };
 
 type Props = {
   mode: "add" | "edit" | "view";
   supplierToEdit?: SupplierToEdit | null;
-  shops: ShopOption[];
+  activeShopId: string;
+  activeShopName: string;
   onSuccess: () => void;
   onClose: () => void;
 };
 
-export default function SupplierFormSideSheet({ mode, supplierToEdit, shops, onSuccess, onClose }: Props) {
+export default function SupplierFormSideSheet({ mode, supplierToEdit, activeShopId, activeShopName, onSuccess, onClose }: Props) {
   const isView = mode === "view";
   const isEdit = mode === "edit";
   const formRef = useRef<HTMLFormElement>(null);
 
   const [state, submitAction, isPending] = useActionState<ActionResult, FormData>(
-    async (prev, formData) => await saveSupplierAction(prev, formData),
+    async (prev, formData) => {
+      formData.set("shopId", activeShopId); // Ensure shopId is passed even if not in visible input
+      return await saveSupplierAction(prev, formData);
+    },
     { success: false }
   );
 
   useEffect(() => { if (state?.success) onSuccess(); }, [state?.success, onSuccess]);
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 flex justify-end">
-      <div className="w-full max-w-[380px] md:max-w-[520px] lg:max-w-[680px] h-full bg-white shadow-2xl flex flex-col overflow-hidden">
-        <div className="flex items-center gap-4 border-b px-6 py-5">
-          <button onClick={onClose} className="p-2 rounded-full hover:bg-gray-100">
-            <ArrowLeft size={26} />
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex justify-end">
+      <div className="w-full max-w-[480px] h-full bg-white shadow-2xl flex flex-col">
+        <div className="flex items-center gap-4 border-b px-6 py-5 bg-gray-50/50">
+          <button onClick={onClose} className="p-2 rounded-full hover:bg-white border border-transparent hover:border-gray-200 transition-all">
+            <ArrowLeft size={22} />
           </button>
-          <h2 className="text-2xl font-semibold flex items-center gap-3">
-            {isView ? <><Eye size={28} className="text-gray-600" /> View Supplier</> : isEdit ? "Edit Supplier" : "Add Supplier"}
+          <h2 className="text-xl font-bold text-gray-900">
+            {isView ? "Supplier Details" : isEdit ? "Update Supplier" : "Add New Supplier"}
           </h2>
         </div>
 
-        <form ref={formRef} action={submitAction} className="flex-1 overflow-y-auto p-6 md:p-8 lg:p-10 space-y-8">
+        <form ref={formRef} action={submitAction} className="flex-1 overflow-y-auto p-6 space-y-6">
           {supplierToEdit?.id && <input type="hidden" name="supplierId" value={supplierToEdit.id} />}
 
+          {/* SHOP CONTEXT (READ ONLY) */}
+          <div className="flex items-center gap-3 rounded-xl border border-green-100 bg-green-50/50 px-4 py-3">
+            <Store size={18} className="text-green-600" />
+            <div>
+              <p className="text-[10px] uppercase tracking-wider font-bold text-green-600">Registering To</p>
+              <p className="text-sm font-semibold text-green-900">{activeShopName}</p>
+            </div>
+          </div>
+
           {state?.error && (
-            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-2xl text-center font-medium">
+            <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-xl text-sm font-medium">
               {state.error}
             </div>
           )}
 
-          {/* NAME */}
-          <div>
-            <label className="block mb-1.5 text-sm font-medium text-gray-700">Name:</label>
-            <input name="name" defaultValue={supplierToEdit?.name || ""} required readOnly={isView} className={`w-full border border-gray-300 rounded-2xl px-5 py-3.5 text-base ${isView ? "bg-gray-50 cursor-not-allowed" : ""}`} placeholder="Supplier name" />
-          </div>
-
-          {/* SHOP */}
-          <div>
-            <label className="block mb-1.5 text-sm font-medium text-gray-700">Shop:</label>
-            <select name="shopId" defaultValue={supplierToEdit?.shopId || ""} required disabled={isView} className={`w-full border border-gray-300 rounded-2xl px-5 py-3.5 text-base ${isView ? "bg-gray-50 cursor-not-allowed" : ""}`}>
-              <option value="">Select shop</option>
-              {shops.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-          </div>
-
-          {/* GOODS */}
-          <div>
-            <label className="block mb-1.5 text-sm font-medium text-gray-700">Goods:</label>
-            <input name="goodsType" defaultValue={supplierToEdit?.goodsType || ""} readOnly={isView} className={`w-full border border-gray-300 rounded-2xl px-5 py-3.5 text-base ${isView ? "bg-gray-50 cursor-not-allowed" : ""}`} placeholder="e.g. tecno, infinix" />
-          </div>
-
-          {/* TEL1 + TEL2 */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="space-y-4">
             <div>
-              <label className="block mb-1.5 text-sm font-medium text-gray-700">Tel1:</label>
-              <input name="contact1" defaultValue={supplierToEdit?.contact1 || ""} required readOnly={isView} className={`w-full border border-gray-300 rounded-2xl px-5 py-3.5 text-base ${isView ? "bg-gray-50 cursor-not-allowed" : ""}`} placeholder="0700000000" />
+              <label className="block text-xs font-bold text-gray-500 uppercase tracking-tight mb-1">Business Name</label>
+              <input name="name" defaultValue={supplierToEdit?.name || ""} required readOnly={isView} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-green-500/20 outline-none" placeholder="Enter supplier name" />
             </div>
+
             <div>
-              <label className="block mb-1.5 text-sm font-medium text-gray-700">Tel2:</label>
-              <input name="contact2" defaultValue={supplierToEdit?.contact2 || ""} readOnly={isView} className={`w-full border border-gray-300 rounded-2xl px-5 py-3.5 text-base ${isView ? "bg-gray-50 cursor-not-allowed" : ""}`} placeholder="Optional" />
+              <label className="block text-xs font-bold text-gray-500 uppercase tracking-tight mb-1 flex items-center gap-1">
+                <Box size={12} /> Goods Provided
+              </label>
+              <input name="goodsType" defaultValue={supplierToEdit?.goodsType || ""} readOnly={isView} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-green-500/20 outline-none" placeholder="e.g. Hardware, Groceries, Electronics" />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-tight mb-1 flex items-center gap-1">
+                  <Phone size={12} /> Contact 1
+                </label>
+                <input name="contact1" defaultValue={supplierToEdit?.contact1 || ""} required readOnly={isView} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-green-500/20 outline-none" placeholder="Required" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-tight mb-1">Contact 2</label>
+                <input name="contact2" defaultValue={supplierToEdit?.contact2 || ""} readOnly={isView} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-green-500/20 outline-none" placeholder="Optional" />
+              </div>
             </div>
           </div>
 
           {!isView && (
-            <button type="submit" disabled={isPending} className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white py-4 text-xl font-semibold rounded-2xl mt-8 flex items-center justify-center gap-2">
-              {isPending ? <Loader2 size={24} className="animate-spin" /> : isEdit ? "Update Supplier" : "Add Supplier"}
+            <button type="submit" disabled={isPending} className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white py-4 rounded-xl font-bold shadow-lg shadow-green-600/20 transition-all flex items-center justify-center gap-2">
+              {isPending ? <Loader2 size={20} className="animate-spin" /> : isEdit ? "Save Changes" : "Register Supplier"}
             </button>
           )}
         </form>

@@ -62,9 +62,10 @@ type Props = {
   staffList: StaffOption[];
   profile: Profile;
   hasStaffRecord: boolean;
+  activeShopId: string;
 };
 
-export default function SaleView({ stats, sales, products, shops, staffList, profile, hasStaffRecord }: Props) {
+export default function SaleView({ stats, sales, products, shops, staffList, profile, hasStaffRecord, activeShopId }: Props) {
   const router = useRouter();
   const [search, setSearch] = useState("");
   const [showPOS, setShowPOS] = useState(false);
@@ -224,6 +225,7 @@ export default function SaleView({ stats, sales, products, shops, staffList, pro
           shops={shops}
           staffList={staffList}
           profile={profile}
+          activeShopId={activeShopId}
           onSuccess={() => { setShowPOS(false); router.refresh(); }}
           onClose={() => setShowPOS(false)}
         />

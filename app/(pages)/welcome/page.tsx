@@ -29,7 +29,7 @@ export default async function ShopsPage() {
 
   const userId = session.user.id;
 
-  // ── Check if this user is a Staff member ──────────────────────────────────
+  // ── Staff: they have exactly one shop — show portal which sets cookie + redirects ──
   const staffRecord = await prisma.staff.findFirst({
     where: { userId },
     select: {
@@ -39,6 +39,10 @@ export default async function ShopsPage() {
   });
 
   if (staffRecord?.shop) {
+    // Render ShopPortal in staff mode.
+    // The client useEffect calls selectShopAction (a Server Action) which
+    // writes the cookie and redirects — cookies CANNOT be set here in a
+    // Server Component, only inside Server Actions or Route Handlers.
     return (
       <ShopPortal
         role="staff"
@@ -48,7 +52,7 @@ export default async function ShopsPage() {
     );
   }
 
-  // ── Otherwise treat as owner ───────────────────────────────────────────────
+  // ── Owner: show all their shops so they can pick one ─────────────────────
   const ownerUser = await prisma.user.findUnique({
     where: { id: userId },
     select: {
@@ -59,6 +63,15 @@ export default async function ShopsPage() {
   });
 
   if (!ownerUser) redirect("/login");
+
+  // Owner with no shops yet
+  if (ownerUser.shops.length === 0) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <p className="text-gray-500">No shops found. Please create a shop first.</p>
+      </div>
+    );
+  }
 
   return <ShopPortal role="owner" user={ownerUser} />;
 }

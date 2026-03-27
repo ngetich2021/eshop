@@ -1,24 +1,17 @@
-// app/suppliers/page.tsx
 import { auth } from "@/auth";
+import { redirect } from "next/navigation";
 import prisma from "@/lib/prisma";
+import { resolveActiveShop } from "@/lib/active-shop";
 import SuppliersView from "./_components/SuppliersView";
 
 export default async function SuppliersPage() {
   const session = await auth();
-  if (!session?.user?.id)
-    return <div className="min-h-screen flex items-center justify-center">Please sign in</div>;
+  if (!session?.user?.id) redirect("/login");
 
-  const userId = session.user.id;
-  const profile = await prisma.profile.findUnique({ where: { userId }, select: { role: true } });
-  const isAdmin = profile?.role?.toLowerCase().trim() === "admin";
-
-  const shops = await prisma.shop.findMany({
-    select: { id: true, name: true },
-    orderBy: { name: "asc" },
-  });
+  const { activeShopId, activeShop } = await resolveActiveShop(session.user.id);
 
   const raw = await prisma.supplier.findMany({
-    where: isAdmin ? undefined : { shop: { userId } },
+    where: { shopId: activeShopId },
     select: {
       id: true,
       name: true,
@@ -45,7 +38,7 @@ export default async function SuppliersPage() {
     <SuppliersView
       stats={{ totalSuppliers: suppliers.length }}
       suppliers={suppliers}
-      shops={shops}
+      activeShop={activeShop}
     />
   );
 }

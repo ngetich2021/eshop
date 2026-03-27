@@ -1,12 +1,38 @@
 // app/sale/quote/page.tsx
 import { auth } from "@/auth";
+import { cookies } from "next/headers";
 import prisma from "@/lib/prisma";
 import QuoteView from "./_components/QuoteView";
+import { selectQuoteShopAction } from "./_components/actions";
+import ShopPortal from "../../welcome/_components/Shopportal";
+
+const shopSelect = {
+  id: true,
+  name: true,
+  tel: true,
+  location: true,
+  wallet: { select: { balance: true } },
+  staffs: {
+    select: {
+      id: true, userId: true, fullName: true,
+      tel1: true, tel2: true, mpesaNo: true, baseSalary: true,
+    },
+  },
+  sales: { select: { soldById: true, totalAmount: true, createdAt: true } },
+  expenses: { select: { amount: true } },
+  buys: { select: { totalAmount: true } },
+  margins: { select: { value: true } },
+  credits: { select: { status: true } },
+} as const;
 
 export default async function QuotePage() {
   const session = await auth();
   if (!session?.user?.id)
-    return <div className="min-h-screen flex items-center justify-center">Please sign in</div>;
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        Please sign in
+      </div>
+    );
 
   const userId = session.user.id;
 
@@ -23,32 +49,88 @@ export default async function QuotePage() {
 
   const isAdmin = profile?.role?.toLowerCase().trim() === "admin";
 
-  const [products, shops, staffList] = await Promise.all([
-    prisma.product.findMany({
-      where: isAdmin ? undefined : { shop: { userId } },
-      select: {
-        id: true,
-        productName: true,
-        sellingPrice: true,
-        buyingPrice: true,
-        discount: true,
-        quantity: true,
-        imageUrl: true,
-        shopId: true,
-        shop: { select: { name: true } },
-      },
-      orderBy: { productName: "asc" },
-    }),
-    prisma.shop.findMany({
-      where: isAdmin ? undefined : { userId },
-      select: { id: true, name: true, location: true, tel: true },
-      orderBy: { name: "asc" },
-    }),
-    prisma.staff.findMany({
-      select: { id: true, fullName: true },
-      orderBy: { fullName: "asc" },
-    }),
-  ]);
+  const shops = await prisma.shop.findMany({
+    where: isAdmin ? undefined : { userId },
+    select: shopSelect,
+    orderBy: { name: "asc" },
+  });
+
+  // ── Read active shop from cookie ───────────────────────────────────────────
+  const cookieStore = await cookies();
+  const cookieShopId = cookieStore.get("active_shop_id")?.value ?? null;
+
+  // Validate the cookie value is a shop this user can actually access
+  const resolvedShopId =
+    cookieShopId && shops.find((s) => s.id === cookieShopId)
+      ? cookieShopId
+      : null;
+
+  // ── No valid shop cookie — show ShopPortal ─────────────────────────────────
+  if (!resolvedShopId) {
+    // Staff with no cookie: find their assigned shop and auto-redirect
+    if (staffRecord) {
+      const staffShop = await prisma.shop.findFirst({
+        where: { staffs: { some: { userId } } },
+        select: shopSelect,
+      });
+
+      if (staffShop) {
+        return (
+          <ShopPortal
+            role="staff"
+            user={{
+              id: userId,
+              name: staffRecord.fullName ?? session.user.name ?? null,
+            }}
+            staffShop={staffShop}
+            selectAction={selectQuoteShopAction}
+          />
+        );
+      }
+    }
+
+    // Owner / admin: show the full portal picker, redirects back to /sale/quote
+    return (
+      <ShopPortal
+        role="owner"
+        user={{
+          id: userId,
+          name: profile?.fullName ?? session.user.name ?? null,
+          shops,
+        }}
+        selectAction={selectQuoteShopAction}
+      />
+    );
+  }
+
+  // ── Valid shop resolved — fetch all quote data ──────────────────────────────
+  const resolvedShop = shops.find((s) => s.id === resolvedShopId)!;
+  const shopFilter = { shopId: resolvedShopId };
+
+  // Reuse staffs already on the shop relation — avoids an extra DB round-trip
+  const staffList =
+    resolvedShop.staffs.length > 0
+      ? resolvedShop.staffs.map((s) => ({ id: s.id, fullName: s.fullName }))
+      : await prisma.staff.findMany({
+          select: { id: true, fullName: true },
+          orderBy: { fullName: "asc" },
+        });
+
+  const products = await prisma.product.findMany({
+    where: shopFilter,
+    select: {
+      id: true,
+      productName: true,
+      sellingPrice: true,
+      buyingPrice: true,
+      discount: true,
+      quantity: true,
+      imageUrl: true,
+      shopId: true,
+      shop: { select: { name: true } },
+    },
+    orderBy: { productName: "asc" },
+  });
 
   const now = new Date();
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -56,11 +138,10 @@ export default async function QuotePage() {
   startOfWeek.setDate(startOfDay.getDate() - startOfDay.getDay());
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
   const startOfYear = new Date(now.getFullYear(), 0, 1);
-  const where = isAdmin ? {} : { shop: { userId } };
 
   const [quotesRaw, todayAgg, weekAgg, monthAgg, yearAgg] = await Promise.all([
     prisma.quote.findMany({
-      where: isAdmin ? undefined : { shop: { userId } },
+      where: shopFilter,
       select: {
         id: true,
         soldById: true,
@@ -82,10 +163,22 @@ export default async function QuotePage() {
       },
       orderBy: { createdAt: "desc" },
     }),
-    prisma.quote.aggregate({ where: { ...where, createdAt: { gte: startOfDay } }, _sum: { amount: true }, _count: true }),
-    prisma.quote.aggregate({ where: { ...where, createdAt: { gte: startOfWeek } }, _sum: { amount: true }, _count: true }),
-    prisma.quote.aggregate({ where: { ...where, createdAt: { gte: startOfMonth } }, _sum: { amount: true }, _count: true }),
-    prisma.quote.aggregate({ where: { ...where, createdAt: { gte: startOfYear } }, _sum: { amount: true }, _count: true }),
+    prisma.quote.aggregate({
+      where: { ...shopFilter, createdAt: { gte: startOfDay } },
+      _sum: { amount: true }, _count: true,
+    }),
+    prisma.quote.aggregate({
+      where: { ...shopFilter, createdAt: { gte: startOfWeek } },
+      _sum: { amount: true }, _count: true,
+    }),
+    prisma.quote.aggregate({
+      where: { ...shopFilter, createdAt: { gte: startOfMonth } },
+      _sum: { amount: true }, _count: true,
+    }),
+    prisma.quote.aggregate({
+      where: { ...shopFilter, createdAt: { gte: startOfYear } },
+      _sum: { amount: true }, _count: true,
+    }),
   ]);
 
   const quotes = quotesRaw.map((q) => ({
@@ -110,14 +203,24 @@ export default async function QuotePage() {
     createdAt: q.createdAt.toISOString(),
   }));
 
+  const shopsForView = shops.map((s) => ({
+    id: s.id,
+    name: s.name,
+    location: s.location ?? "",
+    tel: s.tel ?? "",
+  }));
+
   return (
     <QuoteView
       stats={{
         today: { count: todayAgg._count, amount: todayAgg._sum.amount ?? 0 },
-        week: { count: weekAgg._count, amount: weekAgg._sum.amount ?? 0 },
+        week:  { count: weekAgg._count,  amount: weekAgg._sum.amount  ?? 0 },
         month: { count: monthAgg._count, amount: monthAgg._sum.amount ?? 0 },
-        year: { count: yearAgg._count, amount: yearAgg._sum.amount ?? 0 },
-        total: { count: quotes.length, amount: quotes.reduce((s, q) => s + q.amount, 0) },
+        year:  { count: yearAgg._count,  amount: yearAgg._sum.amount  ?? 0 },
+        total: {
+          count: quotes.length,
+          amount: quotes.reduce((s, q) => s + q.amount, 0),
+        },
       }}
       quotes={quotes}
       products={products.map((p) => ({
@@ -131,14 +234,19 @@ export default async function QuotePage() {
         shopId: p.shopId,
         shopName: p.shop.name,
       }))}
-      shops={shops}
+      shops={shopsForView}
       staffList={staffList}
       profile={{
         role: profile?.role ?? "user",
-        shopId: profile?.shopId ?? null,
-        fullName: staffRecord?.fullName ?? profile?.fullName ?? session.user.name ?? "Unknown",
+        shopId: resolvedShopId,
+        fullName:
+          staffRecord?.fullName ??
+          profile?.fullName ??
+          session.user.name ??
+          "Unknown",
       }}
       hasStaffRecord={!!staffRecord}
+      requiresShopSelection={false}
     />
   );
 }

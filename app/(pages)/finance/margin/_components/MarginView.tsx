@@ -1,146 +1,412 @@
 // app/wallet/margins/_components/MarginView.tsx
 "use client";
 
-import { useEffect, useState } from "react";
-import { Search, Plus, Loader2, MoreVertical } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { deleteMarginAction } from "./actions";
-import MarginFormSideSheet from "./MarginFormSideSheet";
+import { useState, useMemo } from "react";
+import { TrendingUp, ShoppingCart, BarChart3, Calendar, Filter } from "lucide-react";
 
-
-type Margin = { id: string; date: string; value: number; profitType: string | null; shop: string; shopId: string };
-type ShopOption = { id: string; name: string };
-
-type Props = {
-  stats: { totalMargins: number; totalValue: number };
-  margins: Margin[];
-  shops: ShopOption[];
+type SaleItemMargin = {
+  date: string;
+  profit: number;
+  revenue: number;
+  cost: number;
 };
 
-export default function MarginView({ stats, margins, shops }: Props) {
-  const router = useRouter();
-  const [search, setSearch] = useState("");
-  const [showForm, setShowForm] = useState(false);
-  const [mode, setMode] = useState<"add" | "edit" | "view">("add");
-  const [selected, setSelected] = useState<Margin | undefined>();
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [openDropdownId, setOpenDropdownId] = useState<string | null>(null);
-  const [dropdownTop, setDropdownTop] = useState(0);
-  const [dropdownLeft, setDropdownLeft] = useState(0);
+type ActiveShop = { id: string; name: string; location: string };
 
-  useEffect(() => {
-    if (!openDropdownId) return;
-    const close = () => setOpenDropdownId(null);
-    document.addEventListener("click", close);
-    return () => document.removeEventListener("click", close);
-  }, [openDropdownId]);
+type Props = {
+  activeShop: ActiveShop;
+  isStaff: boolean;
+  isAdmin: boolean;
+  soldProfit: number;
+  soldRevenue: number;
+  soldCost: number;
+  currentStockValue: number;
+  currentStockCost: number;
+  currentStockProfit: number;
+  saleItems: SaleItemMargin[];
+};
 
-  const toggleDropdown = (id: string, e: React.MouseEvent<HTMLButtonElement>) => {
-    e.stopPropagation();
-    if (openDropdownId === id) { setOpenDropdownId(null); return; }
-    const rect = e.currentTarget.getBoundingClientRect();
-    const gap = 8, dw = 160, dh = 120;
-    let top = rect.bottom + gap, left = rect.right - dw;
-    if (top + dh > window.innerHeight) top = rect.top - dh - gap;
-    if (left < gap) left = gap;
-    if (left + dw > window.innerWidth - gap) left = window.innerWidth - dw - gap;
-    setDropdownTop(top); setDropdownLeft(left); setOpenDropdownId(id);
-  };
+type Period = "day" | "week" | "month" | "year";
+type FilterMode = "period" | "range" | "specific";
 
-  const openModal = (m: "add" | "edit" | "view", mg?: Margin) => {
-    setMode(m); setSelected(mg); setShowForm(true); setOpenDropdownId(null);
-  };
-  const closeModal = () => { setShowForm(false); setSelected(undefined); };
-  const handleSuccess = () => { closeModal(); router.refresh(); };
+function groupByPeriod(items: SaleItemMargin[], period: Period) {
+  const map: Record<string, { profit: number; revenue: number; cost: number }> = {};
+  items.forEach((item) => {
+    const d = new Date(item.date);
+    let key: string;
+    if (period === "day") {
+      key = d.toISOString().split("T")[0];
+    } else if (period === "week") {
+      const start = new Date(d);
+      start.setDate(d.getDate() - d.getDay());
+      key = start.toISOString().split("T")[0];
+    } else if (period === "month") {
+      key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    } else {
+      key = `${d.getFullYear()}`;
+    }
+    if (!map[key]) map[key] = { profit: 0, revenue: 0, cost: 0 };
+    map[key].profit += item.profit;
+    map[key].revenue += item.revenue;
+    map[key].cost += item.cost;
+  });
+  return Object.entries(map).sort(([a], [b]) => a.localeCompare(b)).map(([key, val]) => ({ key, ...val }));
+}
 
-  const handleDelete = async (id: string) => {
-    if (!confirm("Delete this margin record?")) return;
-    setDeletingId(id);
-    const res = await deleteMarginAction(id);
-    setDeletingId(null);
-    if (res.success) router.refresh();
-    else alert(res.error || "Delete failed");
-    setOpenDropdownId(null);
-  };
+function formatPeriodLabel(key: string, period: Period): string {
+  if (period === "day") {
+    return new Date(key).toLocaleDateString("en-KE", { day: "numeric", month: "short" });
+  } else if (period === "week") {
+    const start = new Date(key);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    return `${start.toLocaleDateString("en-KE", { day: "numeric", month: "short" })} – ${end.toLocaleDateString("en-KE", { day: "numeric", month: "short" })}`;
+  } else if (period === "month") {
+    const [y, m] = key.split("-");
+    return new Date(Number(y), Number(m) - 1, 1).toLocaleDateString("en-KE", { month: "short", year: "numeric" });
+  } else {
+    return key;
+  }
+}
 
-  const filtered = margins.filter((m) =>
-    `${m.profitType} ${m.shop}`.toLowerCase().includes(search.toLowerCase())
+export default function MarginView({
+  activeShop,
+  soldProfit, soldRevenue, soldCost,
+  currentStockValue, currentStockCost, currentStockProfit,
+  saleItems,
+}: Props) {
+  const [period, setPeriod] = useState<Period>("month");
+  const [filterMode, setFilterMode] = useState<FilterMode>("period");
+
+  // Date range filter
+  const today = new Date().toISOString().split("T")[0];
+  const [rangeFrom, setRangeFrom] = useState(() => {
+    const d = new Date();
+    d.setDate(1);
+    return d.toISOString().split("T")[0];
+  });
+  const [rangeTo, setRangeTo] = useState(today);
+  const [specificDate, setSpecificDate] = useState(today);
+
+  // Filter saleItems based on mode
+  const filteredItems = useMemo(() => {
+    if (filterMode === "range") {
+      return saleItems.filter((i) => i.date >= rangeFrom && i.date <= rangeTo);
+    }
+    if (filterMode === "specific") {
+      return saleItems.filter((i) => i.date === specificDate);
+    }
+    return saleItems; // "period" mode — no pre-filter, grouping handles it
+  }, [saleItems, filterMode, rangeFrom, rangeTo, specificDate]);
+
+  // For range/specific mode, always group by day
+  const effectivePeriod: Period = filterMode !== "period" ? "day" : period;
+  const grouped = groupByPeriod(filteredItems, effectivePeriod);
+  const maxProfit = Math.max(...grouped.map((g) => g.profit), 1);
+
+  // Totals for filtered range
+  const filteredTotals = grouped.reduce(
+    (acc, g) => ({ profit: acc.profit + g.profit, revenue: acc.revenue + g.revenue, cost: acc.cost + g.cost }),
+    { profit: 0, revenue: 0, cost: 0 }
   );
+
+  const marginPercent = soldRevenue > 0 ? ((soldProfit / soldRevenue) * 100).toFixed(1) : "0.0";
+  const filteredMarginPct = filteredTotals.revenue > 0
+    ? ((filteredTotals.profit / filteredTotals.revenue) * 100).toFixed(1)
+    : "0.0";
+  const stockMarginPercent = currentStockValue > 0
+    ? ((currentStockProfit / currentStockValue) * 100).toFixed(1) : "0.0";
+
+  const periods: { key: Period; label: string }[] = [
+    { key: "day", label: "Daily" },
+    { key: "week", label: "Weekly" },
+    { key: "month", label: "Monthly" },
+    { key: "year", label: "Yearly" },
+  ];
 
   return (
     <div className="min-h-screen bg-gray-50/80 px-4 py-6 md:px-6">
       <div className="mx-auto max-w-screen-2xl space-y-6">
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <Stat label="Total Transfer" value={`KSh ${stats.totalValue.toLocaleString()}`} />
-          <Stat label="Total Records" value={stats.totalMargins} />
+
+        {/* HEADER */}
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+            <BarChart3 size={24} className="text-violet-600" /> Margin Analytics
+          </h1>
+          <p className="text-sm text-gray-500 mt-0.5">
+            {activeShop.name} — profit & margin data from sales and current stock
+          </p>
         </div>
 
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="relative flex-1 max-w-md">
-            <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search margins..." className="w-full rounded-lg border border-gray-300 pl-10 py-2.5 text-sm focus:border-blue-500" />
+        {/* ── FILTER CONTROLS ─────────────────────────────────────────── */}
+        <div className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <Filter size={16} className="text-violet-500" />
+            <span className="text-sm font-bold text-gray-700">Filter Data</span>
           </div>
-          <button onClick={() => openModal("add")} className="inline-flex items-center gap-1.5 rounded-lg bg-green-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-green-700">
-            <Plus size={16} /> Add Margin
-          </button>
-        </div>
 
-        <div className="overflow-x-auto rounded-xl border bg-white shadow">
-          <table className="w-full min-w-[700px] text-sm">
-            <thead className="bg-gray-50">
-              <tr>
-                {["S/NO","date","value","profit type","shop","actions"].map((h) => (
-                  <th key={h} className="px-6 py-3.5 text-left font-semibold text-gray-700 last:text-center">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {filtered.map((m, i) => (
-                <tr key={m.id} onClick={() => openModal("view", m)} className="cursor-pointer hover:bg-gray-50 transition-all">
-                  <td className="px-6 py-4">{i + 1}</td>
-                  <td className="px-6 py-4">{m.date}</td>
-                  <td className="px-6 py-4 font-medium">KSh {m.value.toLocaleString()}</td>
-                  <td className="px-6 py-4">{m.profitType ?? "—"}</td>
-                  <td className="px-6 py-4">{m.shop}</td>
-                  <td className="px-6 py-4 text-center" onClick={(e) => e.stopPropagation()}>
-                    <button onClick={(e) => toggleDropdown(m.id, e)} className="p-2 hover:bg-gray-100 rounded-full"><MoreVertical size={20} /></button>
-                    {openDropdownId === m.id && (
-                      <div className="fixed z-[10000] w-40 bg-white border rounded-xl shadow-xl py-1" style={{ top: `${dropdownTop}px`, left: `${dropdownLeft}px` }}>
-                        <button onClick={() => { setOpenDropdownId(null); openModal("view", m); }} className="block w-full text-left px-4 py-2 text-sm hover:bg-gray-100">👁️ View</button>
-                        <button onClick={() => { setOpenDropdownId(null); openModal("edit", m); }} className="block w-full text-left px-4 py-2 text-sm hover:bg-gray-100">✏️ Edit</button>
-                        <button onClick={() => handleDelete(m.id)} disabled={deletingId === m.id} className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2">
-                          {deletingId === m.id ? <Loader2 size={16} className="animate-spin" /> : "🗑️"} Delete
-                        </button>
-                      </div>
-                    )}
-                  </td>
-                </tr>
+          {/* Filter mode selector */}
+          <div className="flex gap-2 flex-wrap">
+            {[
+              { key: "period" as FilterMode, label: "📅 By Period" },
+              { key: "range" as FilterMode, label: "📆 Date Range" },
+              { key: "specific" as FilterMode, label: "🎯 Specific Date" },
+            ].map((m) => (
+              <button
+                key={m.key}
+                onClick={() => setFilterMode(m.key)}
+                className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
+                  filterMode === m.key
+                    ? "bg-violet-600 text-white shadow"
+                    : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Period sub-controls */}
+          {filterMode === "period" && (
+            <div className="flex gap-2 flex-wrap">
+              {periods.map((p) => (
+                <button
+                  key={p.key}
+                  onClick={() => setPeriod(p.key)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    period === p.key ? "bg-violet-100 text-violet-700 border border-violet-300" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                  }`}
+                >
+                  {p.label}
+                </button>
               ))}
-              {filtered.length === 0 && <tr><td colSpan={6} className="py-20 text-center text-gray-500">No margin records found</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </div>
+            </div>
+          )}
 
-      {showForm && (
-        <MarginFormSideSheet
-          key={mode + (selected?.id || "new")}
-          mode={mode}
-          marginToEdit={selected ?? null}
-          shops={shops}
-          onSuccess={handleSuccess}
-          onClose={closeModal}
-        />
-      )}
+          {/* Date Range inputs */}
+          {filterMode === "range" && (
+            <div className="flex items-center gap-3 flex-wrap">
+              <div>
+                <label className="text-xs text-gray-500 font-medium block mb-1">From</label>
+                <input
+                  type="date"
+                  value={rangeFrom}
+                  onChange={(e) => setRangeFrom(e.target.value)}
+                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-violet-400"
+                />
+              </div>
+              <div className="text-gray-400 mt-5">→</div>
+              <div>
+                <label className="text-xs text-gray-500 font-medium block mb-1">To</label>
+                <input
+                  type="date"
+                  value={rangeTo}
+                  onChange={(e) => setRangeTo(e.target.value)}
+                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-violet-400"
+                />
+              </div>
+              {/* Quick range shortcuts */}
+              <div className="flex flex-col gap-1 mt-4">
+                <span className="text-xs text-gray-400">Quick:</span>
+                <div className="flex gap-1.5 flex-wrap">
+                  {[
+                    { label: "Today", fn: () => { const t = today; setRangeFrom(t); setRangeTo(t); } },
+                    { label: "This week", fn: () => {
+                      const d = new Date(); const start = new Date(d); start.setDate(d.getDate() - d.getDay());
+                      setRangeFrom(start.toISOString().split("T")[0]); setRangeTo(today);
+                    }},
+                    { label: "This month", fn: () => {
+                      const d = new Date(); const start = new Date(d.getFullYear(), d.getMonth(), 1);
+                      setRangeFrom(start.toISOString().split("T")[0]); setRangeTo(today);
+                    }},
+                    { label: "This year", fn: () => {
+                      const d = new Date(); setRangeFrom(`${d.getFullYear()}-01-01`); setRangeTo(today);
+                    }},
+                  ].map((q) => (
+                    <button key={q.label} onClick={q.fn}
+                      className="px-2 py-1 text-xs bg-violet-50 text-violet-700 hover:bg-violet-100 rounded-lg border border-violet-200">
+                      {q.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Specific date */}
+          {filterMode === "specific" && (
+            <div className="flex items-center gap-3">
+              <div>
+                <label className="text-xs text-gray-500 font-medium block mb-1">Date</label>
+                <input
+                  type="date"
+                  value={specificDate}
+                  onChange={(e) => setSpecificDate(e.target.value)}
+                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-violet-400"
+                />
+              </div>
+              <div className="mt-5 text-sm text-gray-500">
+                Showing data for: <span className="font-semibold text-gray-700">
+                  {new Date(specificDate).toLocaleDateString("en-KE", { day: "numeric", month: "long", year: "numeric" })}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Filtered summary banner */}
+          {filterMode !== "period" && (
+            <div className="grid grid-cols-3 gap-3 bg-violet-50 rounded-xl p-3 mt-2">
+              <div className="text-center">
+                <div className="text-xs text-gray-500">Revenue (filtered)</div>
+                <div className="font-bold text-blue-700">KSh {filteredTotals.revenue.toLocaleString()}</div>
+              </div>
+              <div className="text-center">
+                <div className="text-xs text-gray-500">Profit (filtered)</div>
+                <div className={`font-bold ${filteredTotals.profit >= 0 ? "text-emerald-700" : "text-red-600"}`}>
+                  KSh {filteredTotals.profit.toLocaleString()}
+                </div>
+              </div>
+              <div className="text-center">
+                <div className="text-xs text-gray-500">Margin %</div>
+                <div className="font-bold text-violet-700">{filteredMarginPct}%</div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ── SOLD STOCK METRICS ─────────────────────────────────────── */}
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-3">📦 All-Time Sold Stock Performance</p>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <MetricCard icon={<TrendingUp size={18} className="text-emerald-600" />} bg="from-emerald-50 to-green-50" border="border-emerald-200" iconBg="bg-emerald-100" labelColor="text-emerald-600" label="Total Sales Profit" value={`KSh ${soldProfit.toLocaleString()}`} sub={`Revenue: KSh ${soldRevenue.toLocaleString()} | Cost: KSh ${soldCost.toLocaleString()}`} />
+            <MetricCard icon={<ShoppingCart size={18} className="text-blue-600" />} bg="from-blue-50 to-cyan-50" border="border-blue-200" iconBg="bg-blue-100" labelColor="text-blue-600" label="Total Revenue (Sold)" value={`KSh ${soldRevenue.toLocaleString()}`} sub={`${grouped.length} ${effectivePeriod} periods shown`} />
+            <MetricCard icon={<BarChart3 size={18} className="text-violet-600" />} bg="from-violet-50 to-purple-50" border="border-violet-200" iconBg="bg-violet-100" labelColor="text-violet-600" label="Sales Margin %" value={`${marginPercent}%`} sub="Profit ÷ Revenue × 100 (all time)" />
+          </div>
+        </div>
+
+        {/* ── CURRENT STOCK ──────────────────────────────────────────── */}
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-3">🏪 Current Stock (Present Value)</p>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <MetricCard icon={<ShoppingCart size={18} className="text-amber-600" />} bg="from-amber-50 to-yellow-50" border="border-amber-200" iconBg="bg-amber-100" labelColor="text-amber-600" label="Stock Selling Value" value={`KSh ${currentStockValue.toLocaleString()}`} sub="If all current stock is sold" />
+            <MetricCard icon={<TrendingUp size={18} className="text-rose-600" />} bg="from-rose-50 to-pink-50" border="border-rose-200" iconBg="bg-rose-100" labelColor="text-rose-600" label="Stock Cost Value" value={`KSh ${currentStockCost.toLocaleString()}`} sub="Total buying cost of current stock" />
+            <MetricCard icon={<BarChart3 size={18} className="text-teal-600" />} bg="from-teal-50 to-cyan-50" border="border-teal-200" iconBg="bg-teal-100" labelColor="text-teal-600" label="Potential Stock Profit" value={`KSh ${currentStockProfit.toLocaleString()}`} sub={`${stockMarginPercent}% margin on current stock`} />
+          </div>
+        </div>
+
+        {/* ── CHART ──────────────────────────────────────────────────── */}
+        <div className="rounded-2xl border border-gray-200 bg-white shadow-sm p-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+            <h2 className="text-base font-bold text-gray-900 flex items-center gap-2">
+              <Calendar size={18} className="text-violet-500" />
+              Profit Over Time
+              {filterMode !== "period" && (
+                <span className="text-xs font-normal text-gray-400 ml-2">
+                  ({filterMode === "specific" ? specificDate : `${rangeFrom} → ${rangeTo}`})
+                </span>
+              )}
+            </h2>
+          </div>
+
+          {grouped.length === 0 ? (
+            <div className="py-16 text-center text-gray-400">
+              <BarChart3 size={40} className="mx-auto mb-3 opacity-20" />
+              No sales data for selected period
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <div className="flex items-end gap-3 h-48 min-w-max pb-2">
+                {grouped.map((g) => (
+                  <div key={g.key} className="flex flex-col items-center gap-1 min-w-[80px]">
+                    <div className="flex items-end gap-1 h-40">
+                      <div style={{ height: `${Math.round((g.revenue / maxProfit) * 100)}%` }}
+                        className="w-5 bg-blue-400 rounded-t-lg min-h-[2px]"
+                        title={`Revenue: KSh ${g.revenue.toLocaleString()}`} />
+                      <div style={{ height: `${Math.round((Math.abs(g.profit) / maxProfit) * 100)}%` }}
+                        className={`w-5 rounded-t-lg min-h-[2px] ${g.profit >= 0 ? "bg-emerald-500" : "bg-red-500"}`}
+                        title={`Profit: KSh ${g.profit.toLocaleString()}`} />
+                    </div>
+                    <span className="text-xs text-gray-400 text-center leading-tight">
+                      {formatPeriodLabel(g.key, effectivePeriod)}
+                    </span>
+                    <span className={`text-xs font-semibold ${g.profit >= 0 ? "text-emerald-700" : "text-red-600"}`}>
+                      KSh {g.profit.toLocaleString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-6 mt-4">
+                <div className="flex items-center gap-2 text-xs text-gray-500"><div className="w-3 h-3 bg-blue-400 rounded" /> Revenue</div>
+                <div className="flex items-center gap-2 text-xs text-gray-500"><div className="w-3 h-3 bg-emerald-500 rounded" /> Profit</div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ── TABLE ──────────────────────────────────────────────────── */}
+        {grouped.length > 0 && (
+          <div className="overflow-x-auto rounded-xl border bg-white shadow">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  {["Period", "Revenue", "Cost", "Profit", "Margin %"].map((h) => (
+                    <th key={h} className="px-6 py-3.5 text-left font-semibold text-gray-700">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {grouped.map((g) => {
+                  const mp = g.revenue > 0 ? ((g.profit / g.revenue) * 100).toFixed(1) : "0.0";
+                  return (
+                    <tr key={g.key} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 font-medium text-gray-700">{formatPeriodLabel(g.key, effectivePeriod)}</td>
+                      <td className="px-6 py-4 text-blue-700 font-semibold">KSh {g.revenue.toLocaleString()}</td>
+                      <td className="px-6 py-4 text-gray-600">KSh {g.cost.toLocaleString()}</td>
+                      <td className={`px-6 py-4 font-bold ${g.profit >= 0 ? "text-emerald-700" : "text-red-600"}`}>
+                        KSh {g.profit.toLocaleString()}
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`px-2 py-1 rounded-full text-xs font-semibold ${
+                          Number(mp) >= 20 ? "bg-emerald-100 text-emerald-700" :
+                          Number(mp) >= 10 ? "bg-amber-100 text-amber-700" :
+                          "bg-red-100 text-red-700"}`}>
+                          {mp}%
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {/* Totals row */}
+                <tr className="bg-gray-50 font-bold border-t-2 border-gray-200">
+                  <td className="px-6 py-4 text-gray-800">TOTAL</td>
+                  <td className="px-6 py-4 text-blue-700">KSh {filteredTotals.revenue.toLocaleString()}</td>
+                  <td className="px-6 py-4 text-gray-600">KSh {filteredTotals.cost.toLocaleString()}</td>
+                  <td className={`px-6 py-4 ${filteredTotals.profit >= 0 ? "text-emerald-700" : "text-red-600"}`}>
+                    KSh {filteredTotals.profit.toLocaleString()}
+                  </td>
+                  <td className="px-6 py-4 text-violet-700">{filteredMarginPct}%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
-function Stat({ label, value }: { label: string; value: string | number }) {
+function MetricCard({ icon, bg, border, iconBg, labelColor, label, value, sub }: {
+  icon: React.ReactNode; bg: string; border: string; iconBg: string;
+  labelColor: string; label: string; value: string; sub: string;
+}) {
   return (
-    <div className="rounded-lg border bg-white p-4 text-center shadow-sm">
-      <div className="text-xs font-medium uppercase tracking-wide text-gray-500">{label}</div>
-      <div className="mt-1.5 text-2xl font-bold text-gray-900">{value}</div>
+    <div className={`rounded-xl border ${border} bg-gradient-to-br ${bg} p-5 shadow-sm`}>
+      <div className="flex items-center gap-3 mb-2">
+        <div className={`p-2 ${iconBg} rounded-xl`}>{icon}</div>
+        <span className={`text-xs font-semibold uppercase tracking-wider ${labelColor}`}>{label}</span>
+      </div>
+      <div className="text-2xl font-bold text-gray-900">{value}</div>
+      <p className="text-xs text-gray-500 mt-1">{sub}</p>
     </div>
   );
 }

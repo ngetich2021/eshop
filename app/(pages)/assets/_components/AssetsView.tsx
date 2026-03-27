@@ -4,8 +4,8 @@
 import { useEffect, useState } from "react";
 import { Search, Plus, Loader2, MoreVertical } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { deleteAssetAction } from "./actions";
 import AssetFormSideSheet from "./AssetFormSideSheet";
+import { deleteAssetAction } from "./actions";
 
 type Asset = {
   id: string;
@@ -17,15 +17,16 @@ type Asset = {
   date: string;
 };
 
-type ShopOption = { id: string; name: string };
+type ActiveShop = { id: string; name: string; location: string };
 
 type Props = {
+  activeShop: ActiveShop;
   stats: { totalAssets: number; totalValue: number };
   assets: Asset[];
-  shops: ShopOption[];
+  shopId: string;
 };
 
-export default function AssetsView({ stats, assets, shops }: Props) {
+export default function AssetsView({ activeShop, stats, assets, shopId }: Props) {
   const router = useRouter();
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
@@ -78,6 +79,13 @@ export default function AssetsView({ stats, assets, shops }: Props) {
   return (
     <div className="min-h-screen bg-gray-50/80 px-4 py-6 md:px-6">
       <div className="mx-auto max-w-screen-2xl space-y-6">
+
+        <div className="flex items-center gap-3 text-sm text-gray-500">
+          <span className="font-semibold text-gray-700">{activeShop.name}</span>
+          <span>·</span>
+          <span>{activeShop.location}</span>
+        </div>
+
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <Stat label="Total Assets" value={stats.totalAssets} />
           <Stat label="Total Value" value={`KSh ${stats.totalValue.toLocaleString()}`} />
@@ -86,9 +94,17 @@ export default function AssetsView({ stats, assets, shops }: Props) {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search assets..." className="w-full rounded-lg border border-gray-300 pl-10 py-2.5 text-sm focus:border-blue-500" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search assets..."
+              className="w-full rounded-lg border border-gray-300 pl-10 py-2.5 text-sm focus:border-blue-500"
+            />
           </div>
-          <button onClick={() => openModal("add")} className="inline-flex items-center gap-1.5 rounded-lg bg-green-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-green-700">
+          <button
+            onClick={() => openModal("add")}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-green-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-green-700"
+          >
             <Plus size={16} /> Add Asset
           </button>
         </div>
@@ -97,7 +113,7 @@ export default function AssetsView({ stats, assets, shops }: Props) {
           <table className="w-full min-w-[700px] text-sm">
             <thead className="bg-gray-50">
               <tr>
-                {["S/NO","image","name","date","cost","shop","actions"].map((h) => (
+                {["S/NO", "Image", "Name", "Date", "Cost", "Actions"].map((h) => (
                   <th key={h} className="px-6 py-3.5 text-left font-semibold text-gray-700 last:text-center">{h}</th>
                 ))}
               </tr>
@@ -116,9 +132,10 @@ export default function AssetsView({ stats, assets, shops }: Props) {
                   <td className="px-6 py-4 font-semibold">{a.itemName}</td>
                   <td className="px-6 py-4">{a.date}</td>
                   <td className="px-6 py-4 font-medium">KSh {a.cost.toLocaleString()}</td>
-                  <td className="px-6 py-4">{a.shop}</td>
                   <td className="px-6 py-4 text-center" onClick={(e) => e.stopPropagation()}>
-                    <button onClick={(e) => toggleDropdown(a.id, e)} className="p-2 hover:bg-gray-100 rounded-full"><MoreVertical size={20} /></button>
+                    <button onClick={(e) => toggleDropdown(a.id, e)} className="p-2 hover:bg-gray-100 rounded-full">
+                      <MoreVertical size={20} />
+                    </button>
                     {openDropdownId === a.id && (
                       <div className="fixed z-[10000] w-40 bg-white border rounded-xl shadow-xl py-1" style={{ top: `${dropdownTop}px`, left: `${dropdownLeft}px` }}>
                         <button onClick={() => { setOpenDropdownId(null); openModal("view", a); }} className="block w-full text-left px-4 py-2 text-sm hover:bg-gray-100">👁️ View</button>
@@ -131,7 +148,9 @@ export default function AssetsView({ stats, assets, shops }: Props) {
                   </td>
                 </tr>
               ))}
-              {filtered.length === 0 && <tr><td colSpan={7} className="py-20 text-center text-gray-500">No assets found</td></tr>}
+              {filtered.length === 0 && (
+                <tr><td colSpan={6} className="py-20 text-center text-gray-500">No assets found</td></tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -142,7 +161,7 @@ export default function AssetsView({ stats, assets, shops }: Props) {
           key={mode + (selected?.id || "new")}
           mode={mode}
           assetToEdit={selected ?? null}
-          shops={shops}
+          shopId={shopId}
           onSuccess={handleSuccess}
           onClose={closeModal}
         />

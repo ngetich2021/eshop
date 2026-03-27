@@ -1,6 +1,7 @@
 // app/sale/sold/page.tsx
 import { auth } from "@/auth";
 import prisma from "@/lib/prisma";
+import { resolveActiveShop } from "@/lib/active-shop";
 import SaleView from "./_components/SaleView";
 
 export default async function SalePage() {
@@ -9,6 +10,9 @@ export default async function SalePage() {
     return <div className="min-h-screen flex items-center justify-center">Please sign in</div>;
 
   const userId = session.user.id;
+
+  // ── Resolve the active shop (same pattern as ProductsPage) ──────────────
+  const { activeShopId } = await resolveActiveShop(userId);
 
   const [profile, staffRecord] = await Promise.all([
     prisma.profile.findUnique({
@@ -24,8 +28,9 @@ export default async function SalePage() {
   const isAdmin = profile?.role?.toLowerCase().trim() === "admin";
 
   const [products, shops, staffList] = await Promise.all([
+    // Scope products to the active shop only — regardless of admin/staff role
     prisma.product.findMany({
-      where: isAdmin ? undefined : { shop: { userId } },
+      where: { shopId: activeShopId },
       select: {
         id: true,
         productName: true,
@@ -56,11 +61,13 @@ export default async function SalePage() {
   startOfWeek.setDate(startOfDay.getDate() - startOfDay.getDay());
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
   const startOfYear = new Date(now.getFullYear(), 0, 1);
-  const where = isAdmin ? {} : { shop: { userId } };
+
+  // Stats scoped to active shop only
+  const where = { shopId: activeShopId };
 
   const [salesRaw, todayAgg, weekAgg, monthAgg, yearAgg] = await Promise.all([
     prisma.sale.findMany({
-      where: isAdmin ? undefined : { shop: { userId } },
+      where: { shopId: activeShopId },
       select: {
         id: true,
         soldById: true,
@@ -133,10 +140,11 @@ export default async function SalePage() {
       staffList={staffList}
       profile={{
         role: profile?.role ?? "user",
-        shopId: profile?.shopId ?? null,
+        shopId: activeShopId,
         fullName: staffRecord?.fullName ?? profile?.fullName ?? session.user.name ?? "Unknown",
       }}
       hasStaffRecord={!!staffRecord}
+      activeShopId={activeShopId}
     />
   );
 }

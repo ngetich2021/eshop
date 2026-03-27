@@ -23,6 +23,11 @@ const saleSchema = z.object({
   paymentMethod: z.string().min(1, "Payment method required"),
   shopId: z.string().min(1, "Shop required"),
   items: z.array(saleItemSchema).min(1, "At least one item required"),
+  // Credit fields (only required when paymentMethod === "credit")
+  downPayment: z.number().min(0).default(0),
+  dueDate: z.string().optional(),
+  customerName: z.string().optional(),
+  customerContact: z.string().optional(),
 });
 
 export async function createSaleAction(
@@ -40,7 +45,10 @@ export async function createSaleAction(
   ]);
 
   if (!staffRecord)
-    return { success: false, error: "Your account is not linked to a staff record. Please contact your administrator." };
+    return {
+      success: false,
+      error: "Your account is not linked to a staff record. Please contact your administrator.",
+    };
 
   const isAdmin = profile?.role?.toLowerCase().trim() === "admin";
 
@@ -64,6 +72,10 @@ export async function createSaleAction(
     paymentMethod: formData.get("paymentMethod")?.toString() ?? "",
     shopId: resolvedShopId,
     items,
+    downPayment: Number(formData.get("downPayment") || 0),
+    dueDate: formData.get("dueDate")?.toString() || undefined,
+    customerName: formData.get("customerName")?.toString() || undefined,
+    customerContact: formData.get("customerContact")?.toString() || undefined,
   };
 
   try {
@@ -75,8 +87,10 @@ export async function createSaleAction(
     );
 
     const itemsJson = JSON.stringify(validated.items);
+    const isCredit = validated.paymentMethod === "credit";
 
     const sale = await prisma.$transaction(async (tx) => {
+      // Validate stock and decrement
       for (const item of validated.items) {
         const product = await tx.product.findUnique({
           where: { id: item.productId },
@@ -84,14 +98,17 @@ export async function createSaleAction(
         });
         if (!product) throw new Error(`Product not found`);
         if (product.quantity < item.quantity)
-          throw new Error(`Insufficient stock for "${product.productName}" (available: ${product.quantity})`);
+          throw new Error(
+            `Insufficient stock for "${product.productName}" (available: ${product.quantity})`
+          );
         await tx.product.update({
           where: { id: item.productId },
           data: { quantity: { decrement: item.quantity } },
         });
       }
 
-      return tx.sale.create({
+      // Create the sale
+      const newSale = await tx.sale.create({
         data: {
           soldById: staffRecord.id,
           itemsJson,
@@ -108,9 +125,51 @@ export async function createSaleAction(
           },
         },
       });
+
+      // If credit: record down payment as a Payment, create Credit record for balance
+      if (isCredit) {
+        const creditAmount = totalAmount - validated.downPayment;
+
+        // Record down payment if any
+        if (validated.downPayment > 0) {
+          await tx.payment.create({
+            data: {
+              amount: validated.downPayment,
+              method: "credit_downpayment",
+              transactionCode: `DP-${newSale.id.slice(-8).toUpperCase()}`,
+              shopId: validated.shopId,
+            },
+          });
+        }
+
+        // Create credit tracking record
+        await tx.credit.create({
+          data: {
+            amount: totalAmount,
+            downPayment: validated.downPayment,
+            dueDate: validated.dueDate ? new Date(`${validated.dueDate}T00:00:00.000Z`) : null,
+            status: validated.downPayment >= totalAmount ? "paid" : validated.downPayment > 0 ? "partial" : "pending",
+            shopId: validated.shopId,
+          },
+        });
+      } else {
+        // Non-credit: record full payment
+        await tx.payment.create({
+          data: {
+            amount: totalAmount,
+            method: validated.paymentMethod,
+            transactionCode: `PAY-${newSale.id.slice(-8).toUpperCase()}`,
+            shopId: validated.shopId,
+          },
+        });
+      }
+
+      return newSale;
     });
 
     revalidatePath("/sale/sold");
+    revalidatePath("/credit");
+    revalidatePath("/payments");
     return { success: true, saleId: sale.id };
   } catch (err) {
     if (err instanceof z.ZodError) return { success: false, error: err.issues[0]?.message ?? "Validation failed" };

@@ -1,28 +1,23 @@
+// app/reports/page.tsx
 import { auth } from "@/auth";
+import { redirect } from "next/navigation";
 import prisma from "@/lib/prisma";
+import { resolveActiveShop } from "@/lib/active-shop";
 import ReportsView from "./_components/ReportsView";
 
 export default async function ReportsPage() {
   const session = await auth();
-  if (!session?.user?.id)
-    return <div className="min-h-screen flex items-center justify-center">Please sign in</div>;
+  if (!session?.user?.id) redirect("/login");
 
-  const userId = session.user.id;
-  const profile = await prisma.profile.findUnique({ where: { userId }, select: { role: true } });
-  const isAdmin = profile?.role?.toLowerCase().trim() === "admin";
-  const where = isAdmin ? {} : { shop: { userId } };
+  const { activeShopId, activeShop } = await resolveActiveShop(session.user.id);
 
-  const shops = await prisma.shop.findMany({
-    where: isAdmin ? undefined : { userId },
-    select: { id: true, name: true },
-    orderBy: { name: "asc" },
-  });
+  // All queries scoped to the active shop
+  const where = { shopId: activeShopId };
 
-  // Aggregate all model counts and amounts
   const [
     salesAgg, quotesAgg, paymentsAgg, expensesAgg,
     creditsAgg, advancesAgg, salariesAgg, payrollsAgg,
-    buysAgg, adjustmentsAgg, assetsAgg, suppliersAgg,
+    buysAgg, adjustmentsAgg, assetsAgg, suppliersCount,
     staffCount, productCount, marginsAgg, transactionsAgg,
   ] = await Promise.all([
     prisma.sale.aggregate({ where, _sum: { totalAmount: true }, _count: true }),
@@ -37,29 +32,29 @@ export default async function ReportsPage() {
     prisma.adjustment.aggregate({ where, _count: true }),
     prisma.asset.aggregate({ where, _sum: { cost: true }, _count: true }),
     prisma.supplier.count({ where }),
-    prisma.staff.count(),
-    prisma.product.count({ where: isAdmin ? undefined : { shop: { userId } } }),
+    prisma.staff.count({ where: { shopId: activeShopId } }),
+    prisma.product.count({ where }),
     prisma.margin.aggregate({ where, _sum: { value: true }, _count: true }),
     prisma.transaction.aggregate({ where, _sum: { amount: true }, _count: true }),
   ]);
 
-  // Monthly sales for chart (last 12 months)
+  // Monthly data (last 12 months) for the active shop
   const twelveMonthsAgo = new Date();
   twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 11);
   twelveMonthsAgo.setDate(1);
   twelveMonthsAgo.setHours(0, 0, 0, 0);
 
-  const monthlySalesRaw = await prisma.sale.findMany({
-    where: { ...where, createdAt: { gte: twelveMonthsAgo } },
-    select: { totalAmount: true, createdAt: true },
-  });
+  const [monthlySalesRaw, monthlyExpensesRaw] = await Promise.all([
+    prisma.sale.findMany({
+      where: { ...where, createdAt: { gte: twelveMonthsAgo } },
+      select: { totalAmount: true, createdAt: true },
+    }),
+    prisma.expense.findMany({
+      where: { ...where, createdAt: { gte: twelveMonthsAgo } },
+      select: { amount: true, createdAt: true },
+    }),
+  ]);
 
-  const monthlyExpensesRaw = await prisma.expense.findMany({
-    where: { ...where, createdAt: { gte: twelveMonthsAgo } },
-    select: { amount: true, createdAt: true },
-  });
-
-  // Build monthly buckets
   const monthlyMap: Record<string, { sales: number; expenses: number }> = {};
   for (let i = 0; i < 12; i++) {
     const d = new Date(twelveMonthsAgo);
@@ -88,7 +83,7 @@ export default async function ReportsPage() {
 
   return (
     <ReportsView
-      shops={shops}
+      activeShop={activeShop}
       summary={{
         sales: { count: salesAgg._count, amount: salesAgg._sum.totalAmount ?? 0 },
         quotes: { count: quotesAgg._count, amount: quotesAgg._sum.amount ?? 0 },
@@ -101,7 +96,7 @@ export default async function ReportsPage() {
         buys: { count: buysAgg._count, amount: buysAgg._sum.totalAmount ?? 0, fare: buysAgg._sum.transportCost ?? 0 },
         adjustments: { count: adjustmentsAgg._count },
         assets: { count: assetsAgg._count, amount: assetsAgg._sum.cost ?? 0 },
-        suppliers: suppliersAgg,
+        suppliers: suppliersCount,
         staff: staffCount,
         products: productCount,
         margins: { count: marginsAgg._count, amount: marginsAgg._sum.value ?? 0 },

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useMemo, useEffect, useTransition } from "react";
+import { selectShopAction } from "./actions";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type StaffMember = {
@@ -40,10 +40,18 @@ type OwnerUser = {
   shops: Shop[];
 };
 
-// Discriminated union — page.tsx decides which role to pass
 type Props =
-  | { role: "owner"; user: OwnerUser }
-  | { role: "staff"; user: { id: string; name: string | null }; staffShop: Shop };
+  | {
+      role: "owner";
+      user: OwnerUser;
+      selectAction?: (id: string) => Promise<void>;
+    }
+  | {
+      role: "staff";
+      user: { id: string; name: string | null };
+      staffShop: Shop;
+      selectAction?: (id: string) => Promise<void>;
+    };
 
 // ─── UTILS ────────────────────────────────────────────────────────────────────
 const kes = (n: number) => `KES ${Number(n || 0).toLocaleString()}`;
@@ -60,8 +68,8 @@ const isToday = (date: Date | string) => {
 
 const tier = (amount: number) => {
   if (amount > 1000) return { bg: "#16a34a", glow: "#16a34a55", label: "Above 1K" };
-  if (amount >= 1)   return { bg: "#ca8a04", glow: "#ca8a0455", label: "1 – 999"  };
-  return               { bg: "#dc2626", glow: "#dc262655", label: "No Sales"  };
+  if (amount >= 1)   return { bg: "#ca8a04", glow: "#ca8a0455", label: "1 – 999" };
+  return               { bg: "#dc2626", glow: "#dc262655", label: "No Sales" };
 };
 
 const shopTodaySales = (shop: Shop) =>
@@ -76,7 +84,8 @@ function RedirectingScreen({ name, shopName }: { name: string | null; shopName: 
       minHeight: "100vh",
       background: "linear-gradient(135deg, #f0f4ff 0%, #fafcff 40%, #f5f0ff 100%)",
       fontFamily: "'DM Sans','Segoe UI',sans-serif",
-      display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 16,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      flexDirection: "column", gap: 16,
     }}>
       <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
       <div style={{ width: 44, height: 44, border: "3px solid rgba(99,102,241,0.15)", borderTop: "3px solid #6366f1", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
@@ -90,17 +99,45 @@ function RedirectingScreen({ name, shopName }: { name: string | null; shopName: 
   );
 }
 
+// ─── SELECTING SCREEN ─────────────────────────────────────────────────────────
+function SelectingScreen({ shopName }: { shopName: string }) {
+  return (
+    <div style={{
+      minHeight: "100vh",
+      background: "linear-gradient(135deg, #f0f4ff 0%, #fafcff 40%, #f5f0ff 100%)",
+      fontFamily: "'DM Sans','Segoe UI',sans-serif",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      flexDirection: "column", gap: 16,
+    }}>
+      <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
+      <div style={{ width: 44, height: 44, border: "3px solid rgba(99,102,241,0.15)", borderTop: "3px solid #6366f1", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+      <div style={{ fontWeight: 800, fontSize: "1.1rem", color: "#0f172a" }}>
+        Opening <span style={{ color: "#6366f1" }}>{shopName}</span>…
+      </div>
+      <div style={{ fontSize: "0.82rem", color: "#64748b" }}>Setting up your dashboard</div>
+    </div>
+  );
+}
+
 // ─── SHOP CARD ────────────────────────────────────────────────────────────────
-function ShopCard({ shop, index, onClick }: { shop: Shop; index: number; onClick: (s: Shop) => void }) {
+function ShopCard({
+  shop, index, onClick, loading,
+}: {
+  shop: Shop;
+  index: number;
+  onClick: (s: Shop) => void;
+  loading: boolean;
+}) {
   const total = shopTodaySales(shop);
   const t = tier(total);
   const [hov, setHov] = useState(false);
 
   return (
     <button
-      onClick={() => onClick(shop)}
+      onClick={() => !loading && onClick(shop)}
       onMouseEnter={() => setHov(true)}
       onMouseLeave={() => setHov(false)}
+      disabled={loading}
       style={{
         background: hov ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.75)",
         backdropFilter: "blur(16px)",
@@ -109,16 +146,17 @@ function ShopCard({ shop, index, onClick }: { shop: Shop; index: number; onClick
         border: `1.5px solid ${hov ? t.bg + "55" : "rgba(99,102,241,0.12)"}`,
         padding: "20px 18px 16px",
         textAlign: "left",
-        cursor: "pointer",
-        transform: hov ? "translateY(-6px) scale(1.02)" : "none",
+        cursor: loading ? "not-allowed" : "pointer",
+        transform: hov && !loading ? "translateY(-6px) scale(1.02)" : "none",
         boxShadow: hov
           ? `0 20px 48px ${t.glow}, 0 4px 16px rgba(0,0,0,0.07)`
           : "0 2px 16px rgba(99,102,241,0.07), 0 1px 4px rgba(0,0,0,0.04)",
         transition: "all 0.22s cubic-bezier(.34,1.56,.64,1)",
-        opacity: 0,
+        opacity: loading ? 0.6 : 1,
         animation: "fadeUp 0.38s ease forwards",
         animationDelay: `${index * 0.08}s`,
         minWidth: 0,
+        position: "relative",
       }}
     >
       <div style={{ fontWeight: 800, fontSize: "1.05rem", color: "#0f172a", letterSpacing: "-0.02em", marginBottom: 3 }}>{shop.name}</div>
@@ -136,8 +174,14 @@ function ShopCard({ shop, index, onClick }: { shop: Shop; index: number; onClick
   );
 }
 
-// ─── WELCOME PAGE (owner only) ────────────────────────────────────────────────
-function WelcomePage({ user, onSelect }: { user: OwnerUser; onSelect: (s: Shop) => void }) {
+// ─── WELCOME PAGE ─────────────────────────────────────────────────────────────
+function WelcomePage({
+  user, onSelect, isPending,
+}: {
+  user: OwnerUser;
+  onSelect: (s: Shop) => void;
+  isPending: boolean;
+}) {
   const [q, setQ] = useState("");
 
   const filtered = useMemo(
@@ -158,7 +202,6 @@ function WelcomePage({ user, onSelect }: { user: OwnerUser; onSelect: (s: Shop) 
         input:focus { border-color: #6366f1 !important; box-shadow: 0 0 0 3px rgba(99,102,241,0.12); }
       `}</style>
 
-      {/* Blobs */}
       <div style={{ position: "fixed", top: -160, right: -100, width: 520, height: 520, borderRadius: "50%", background: "radial-gradient(circle, rgba(99,102,241,0.12) 0%, transparent 70%)", animation: "drift 12s ease-in-out infinite", pointerEvents: "none" }} />
       <div style={{ position: "fixed", bottom: -120, left: -80, width: 400, height: 400, borderRadius: "50%", background: "radial-gradient(circle, rgba(251,191,36,0.1) 0%, transparent 70%)", animation: "drift 16s ease-in-out infinite reverse", pointerEvents: "none" }} />
       <div style={{ position: "fixed", top: "40%", left: "30%", width: 300, height: 300, borderRadius: "50%", background: "radial-gradient(circle, rgba(236,72,153,0.06) 0%, transparent 70%)", pointerEvents: "none" }} />
@@ -204,7 +247,7 @@ function WelcomePage({ user, onSelect }: { user: OwnerUser; onSelect: (s: Shop) 
       <main style={{ padding: "22px 44px 60px", position: "relative" }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(195px,1fr))", gap: 16 }}>
           {filtered.map((shop, i) => (
-            <ShopCard key={shop.id} shop={shop} index={i} onClick={onSelect} />
+            <ShopCard key={shop.id} shop={shop} index={i} onClick={onSelect} loading={isPending} />
           ))}
         </div>
         {filtered.length === 0 && (
@@ -217,12 +260,18 @@ function WelcomePage({ user, onSelect }: { user: OwnerUser; onSelect: (s: Shop) 
 
 // ─── ROOT ─────────────────────────────────────────────────────────────────────
 export default function ShopPortal(props: Props) {
-  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
+  const [selectingShop, setSelectingShop] = useState<Shop | null>(null);
 
-  // Staff: fire redirect immediately on mount
+  // Resolve which action to use — caller can override to redirect elsewhere
+  const resolvedAction = props.selectAction ?? selectShopAction;
+
+  // Staff: auto-select on mount
   useEffect(() => {
     if (props.role === "staff") {
-      router.replace(`/dashboard?shopId=${props.staffShop.id}`);
+      startTransition(async () => {
+        await resolvedAction(props.staffShop.id);
+      });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -231,10 +280,22 @@ export default function ShopPortal(props: Props) {
     return <RedirectingScreen name={props.user.name} shopName={props.staffShop.name} />;
   }
 
+  if (selectingShop) {
+    return <SelectingScreen shopName={selectingShop.name} />;
+  }
+
+  const handleSelect = (shop: Shop) => {
+    setSelectingShop(shop);
+    startTransition(async () => {
+      await resolvedAction(shop.id);
+    });
+  };
+
   return (
     <WelcomePage
       user={props.user}
-      onSelect={(shop) => router.push(`/dashboard?shopId=${shop.id}`)}
+      onSelect={handleSelect}
+      isPending={isPending}
     />
   );
 }

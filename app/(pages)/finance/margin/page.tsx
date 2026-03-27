@@ -1,44 +1,80 @@
 // app/wallet/margins/page.tsx
 import { auth } from "@/auth";
+import { redirect } from "next/navigation";
 import prisma from "@/lib/prisma";
+import { resolveActiveShop } from "@/lib/active-shop";
 import MarginView from "./_components/MarginView";
 
 export default async function MarginPage() {
   const session = await auth();
-  if (!session?.user?.id)
-    return <div className="min-h-screen flex items-center justify-center">Please sign in</div>;
+  if (!session?.user?.id) redirect("/login");
 
-  const userId = session.user.id;
-  const profile = await prisma.profile.findUnique({ where: { userId }, select: { role: true } });
-  const isAdmin = profile?.role?.toLowerCase().trim() === "admin";
+  const { activeShopId, activeShop, isStaff, isAdmin } = await resolveActiveShop(session.user.id);
 
-  const shops = await prisma.shop.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } });
-
-  const raw = await prisma.margin.findMany({
-    where: isAdmin ? undefined : { shop: { userId } },
+  // ── SOLD STOCK: profit per sale item ──
+  const rawSaleItems = await prisma.saleItem.findMany({
+    where: { sale: { shopId: activeShopId } },
     select: {
-      id: true, date: true, value: true, profitType: true,
-      shopId: true, shop: { select: { name: true } },
+      quantity: true,
+      price: true,       // selling price at time of sale
+      discount: true,
+      product: { select: { buyingPrice: true } },
+      sale: { select: { createdAt: true } },
     },
-    orderBy: { date: "desc" },
   });
 
-  const margins = raw.map((m) => ({
-    id: m.id,
-    date: m.date.toISOString().split("T")[0],
-    value: m.value,
-    profitType: m.profitType ?? null,
-    shop: m.shop.name,
-    shopId: m.shopId,
+  // Group into per-day buckets for charting
+  const dayMap: Record<string, { profit: number; revenue: number; cost: number }> = {};
+  let totalSoldProfit = 0;
+  let totalSoldRevenue = 0;
+  let totalSoldCost = 0;
+
+  for (const item of rawSaleItems) {
+    const effectiveSelling = item.price - (item.discount ?? 0);
+    const itemRevenue = effectiveSelling * item.quantity;
+    const itemCost = item.product.buyingPrice * item.quantity;
+    const itemProfit = itemRevenue - itemCost;
+
+    totalSoldRevenue += itemRevenue;
+    totalSoldCost += itemCost;
+    totalSoldProfit += itemProfit;
+
+    const dateKey = item.sale.createdAt.toISOString().split("T")[0];
+    if (!dayMap[dateKey]) dayMap[dateKey] = { profit: 0, revenue: 0, cost: 0 };
+    dayMap[dateKey].profit += itemProfit;
+    dayMap[dateKey].revenue += itemRevenue;
+    dayMap[dateKey].cost += itemCost;
+  }
+
+  const saleItems = Object.entries(dayMap).map(([date, val]) => ({
+    date,
+    profit: val.profit,
+    revenue: val.revenue,
+    cost: val.cost,
   }));
 
-  const totalValue = margins.reduce((s, m) => s + m.value, 0);
+  // ── CURRENT STOCK: present value ──
+  const products = await prisma.product.findMany({
+    where: { shopId: activeShopId },
+    select: { sellingPrice: true, buyingPrice: true, quantity: true },
+  });
+
+  const currentStockValue = products.reduce((s, p) => s + p.sellingPrice * p.quantity, 0);
+  const currentStockCost = products.reduce((s, p) => s + p.buyingPrice * p.quantity, 0);
+  const currentStockProfit = currentStockValue - currentStockCost;
 
   return (
     <MarginView
-      stats={{ totalMargins: margins.length, totalValue }}
-      margins={margins}
-      shops={shops}
+      activeShop={activeShop}
+      isStaff={isStaff}
+      isAdmin={isAdmin}
+      soldProfit={totalSoldProfit}
+      soldRevenue={totalSoldRevenue}
+      soldCost={totalSoldCost}
+      currentStockValue={currentStockValue}
+      currentStockCost={currentStockCost}
+      currentStockProfit={currentStockProfit}
+      saleItems={saleItems}
     />
   );
 }

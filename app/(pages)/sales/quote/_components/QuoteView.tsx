@@ -3,9 +3,10 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Search, Plus, Loader2, MoreVertical, ArrowRightCircle, AlertCircle, Printer, X } from "lucide-react";
+import { Search, Plus, Loader2, MoreVertical, ArrowRightCircle, AlertCircle, Printer, X, Store } from "lucide-react";
 import { convertQuoteToSaleAction, deleteQuoteAction } from "./actions";
 import QuotePOSSheet from "./QuotePOSSheet";
+import ConvertModal from "./ConvertModal"; // IMPORTED HERE
 
 type QuoteItem = {
   id: string;
@@ -61,72 +62,8 @@ type Props = {
   staffList: StaffOption[];
   profile: Profile;
   hasStaffRecord: boolean;
+  requiresShopSelection?: boolean;
 };
-
-// ── CONVERT MODAL ──────────────────────────────────────────────────────────────
-function ConvertModal({
-  quote,
-  onConfirm,
-  onClose,
-  loading,
-}: {
-  quote: Quote;
-  onConfirm: (paymentMethod: string) => void;
-  onClose: () => void;
-  loading: boolean;
-}) {
-  const [paymentMethod, setPaymentMethod] = useState("");
-
-  return (
-    <div className="fixed inset-0 z-[200] bg-black/60 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
-        <div className="flex items-center justify-between px-5 py-4 border-b">
-          <h2 className="font-bold text-gray-800">Convert to Sale</h2>
-          <button onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-lg">
-            <X size={18} />
-          </button>
-        </div>
-        <div className="p-5 space-y-4">
-          <p className="text-sm text-gray-600">
-            Converting{" "}
-            <span className="font-semibold">
-              {quote.items.map((i) => i.productName).join(", ")}
-            </span>{" "}
-            to a sale. Stock will be decremented.
-          </p>
-          <div>
-            <label className="block mb-1.5 text-sm font-medium text-gray-700">
-              Payment Method:
-            </label>
-            <select
-              value={paymentMethod}
-              onChange={(e) => setPaymentMethod(e.target.value)}
-              className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm"
-            >
-              <option value="">Select payment method...</option>
-              <option value="cash">Cash</option>
-              <option value="mpesa">M-Pesa</option>
-              <option value="bank">Bank</option>
-              <option value="card">Card</option>
-              <option value="credit">Credit</option>
-            </select>
-          </div>
-          <button
-            onClick={() => paymentMethod && onConfirm(paymentMethod)}
-            disabled={!paymentMethod || loading}
-            className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white py-3 font-bold rounded-xl flex items-center justify-center gap-2"
-          >
-            {loading ? (
-              <Loader2 size={18} className="animate-spin" />
-            ) : (
-              <><ArrowRightCircle size={18} /> Confirm Sale</>
-            )}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ── QUOTE PRINT MODAL ──────────────────────────────────────────────────────────
 function QuotePrintModal({ quote, onClose }: { quote: Quote; onClose: () => void }) {
@@ -188,7 +125,6 @@ function QuotePrintModal({ quote, onClose }: { quote: Quote; onClose: () => void
             ref={printRef}
             className="font-mono text-xs border border-dashed border-gray-300 rounded-xl p-5 bg-white"
           >
-            {/* SHOP HEADER */}
             <div className="shop-name text-center text-base font-bold mb-1">{quote.shop}</div>
             <div className="text-center text-gray-600 text-xs">
               {quote.shopLocation && <div>{quote.shopLocation}</div>}
@@ -199,7 +135,6 @@ function QuotePrintModal({ quote, onClose }: { quote: Quote; onClose: () => void
 
             <div className="font-bold text-center text-sm mb-2">QUOTATION</div>
 
-            {/* META */}
             <div className="flex justify-between text-xs mb-1">
               <span>Quote No:</span><span className="font-bold">{quoteNo}</span>
             </div>
@@ -222,7 +157,6 @@ function QuotePrintModal({ quote, onClose }: { quote: Quote; onClose: () => void
 
             <div className="border-t border-dashed border-gray-400 my-3" />
 
-            {/* ITEMS HEADER */}
             <div className="flex justify-between font-bold text-xs mb-1">
               <span className="flex-1">Item</span>
               <span className="w-10 text-center">Qty</span>
@@ -231,7 +165,6 @@ function QuotePrintModal({ quote, onClose }: { quote: Quote; onClose: () => void
             </div>
             <div className="border-t border-dashed border-gray-300 mb-2" />
 
-            {/* ITEMS */}
             {quote.items.map((item, i) => (
               <div key={item.id} className="flex justify-between text-xs mb-1">
                 <span className="flex-1 truncate pr-1">{i + 1}. {item.productName}</span>
@@ -247,7 +180,6 @@ function QuotePrintModal({ quote, onClose }: { quote: Quote; onClose: () => void
 
             <div className="border-t border-dashed border-gray-300 my-2" />
 
-            {/* TOTAL */}
             <div className="flex justify-between font-bold text-sm">
               <span>Total Amount:</span>
               <span>KSh {quote.amount.toLocaleString()}</span>
@@ -255,13 +187,66 @@ function QuotePrintModal({ quote, onClose }: { quote: Quote; onClose: () => void
 
             <div className="border-t border-dashed border-gray-300 my-3" />
 
-            {/* FOOTER */}
             <div className="text-center text-xs text-gray-500">
               This is a quotation only — not a receipt.<br />
               Valid for 7 days. Thank you for your interest! 🙏
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── SHOP SELECTION GATE ────────────────────────────────────────────────────────
+function ShopSelectionGate({
+  shops,
+  onSelect,
+}: {
+  shops: ShopOption[];
+  onSelect: (shopId: string) => void;
+}) {
+  const [selected, setSelected] = useState("");
+
+  return (
+    <div className="min-h-screen bg-gray-50/80 flex items-center justify-center px-4">
+      <div className="bg-white rounded-2xl shadow-xl border border-gray-200 w-full max-w-md p-8 space-y-6">
+        <div className="text-center space-y-2">
+          <div className="inline-flex items-center justify-center w-14 h-14 bg-blue-50 rounded-2xl mb-2">
+            <Store size={28} className="text-blue-600" />
+          </div>
+          <h1 className="text-xl font-bold text-gray-900">Select a Shop</h1>
+          <p className="text-sm text-gray-500">
+            Choose a shop to view its quotes and data.
+          </p>
+        </div>
+
+        <div className="space-y-3">
+          {shops.map((shop) => (
+            <button
+              key={shop.id}
+              onClick={() => setSelected(shop.id)}
+              className={`w-full text-left rounded-xl border px-4 py-3.5 transition-all ${
+                selected === shop.id
+                  ? "border-blue-500 bg-blue-50 shadow-sm"
+                  : "border-gray-200 hover:border-blue-300 hover:bg-gray-50"
+              }`}
+            >
+              <div className="font-semibold text-gray-800">{shop.name}</div>
+              {shop.location && (
+                <div className="text-xs text-gray-500 mt-0.5">{shop.location}</div>
+              )}
+            </button>
+          ))}
+        </div>
+
+        <button
+          onClick={() => selected && onSelect(selected)}
+          disabled={!selected}
+          className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-200 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors"
+        >
+          Continue
+        </button>
       </div>
     </div>
   );
@@ -276,6 +261,7 @@ export default function QuoteView({
   staffList,
   profile,
   hasStaffRecord,
+  requiresShopSelection = false,
 }: Props) {
   const router = useRouter();
   const [search, setSearch] = useState("");
@@ -295,6 +281,15 @@ export default function QuoteView({
     document.addEventListener("click", close);
     return () => document.removeEventListener("click", close);
   }, [openDropdownId]);
+
+  if (requiresShopSelection) {
+    return (
+      <ShopSelectionGate
+        shops={shops}
+        onSelect={(shopId) => router.push(`/sale/quote?shopId=${shopId}`)}
+      />
+    );
+  }
 
   const toggleDropdown = (id: string, e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
@@ -318,10 +313,11 @@ export default function QuoteView({
     setOpenDropdownId(null);
   };
 
-  const handleConvert = async (paymentMethod: string) => {
+  // UPDATED: Now supports the additional fields from ConvertModal
+  const handleConvert = async (paymentMethod: string, downPayment: number, dueDate?: string) => {
     if (!convertQuote) return;
     setConvertingId(convertQuote.id);
-    const res = await convertQuoteToSaleAction(convertQuote.id, paymentMethod);
+    const res = await convertQuoteToSaleAction(convertQuote.id, paymentMethod, downPayment, dueDate);
     setConvertingId(null);
     setConvertQuote(null);
     if (res.success) router.refresh();
@@ -334,11 +330,14 @@ export default function QuoteView({
       .includes(search.toLowerCase())
   );
 
+  const selectedShop = shops.find((s) => s.id === profile.shopId);
+  const isAdmin = profile.role?.toLowerCase().trim() === "admin";
+  const canChangeShop = isAdmin || shops.length > 1;
+
   return (
     <div className="min-h-screen bg-gray-50/80 px-4 py-6 md:px-6">
       <div className="mx-auto max-w-screen-2xl space-y-6">
 
-        {/* NO STAFF WARNING */}
         {!hasStaffRecord && (
           <div className="flex items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-5 py-4 text-amber-800">
             <AlertCircle size={20} className="shrink-0 text-amber-500" />
@@ -348,7 +347,27 @@ export default function QuoteView({
           </div>
         )}
 
-        {/* STATS */}
+        <div className="flex items-center justify-between rounded-xl border bg-white px-5 py-3 shadow-sm">
+          <div className="flex items-center gap-3">
+            <Store size={18} className="text-blue-600 shrink-0" />
+            <div>
+              <div className="text-xs text-gray-500 font-medium uppercase tracking-wide">Viewing shop</div>
+              <div className="font-bold text-gray-900">{selectedShop?.name ?? "—"}</div>
+              {selectedShop?.location && (
+                <div className="text-xs text-gray-500">{selectedShop.location}</div>
+              )}
+            </div>
+          </div>
+          {canChangeShop && (
+            <button
+              onClick={() => router.push("/welcome")}
+              className="text-sm text-blue-600 hover:text-blue-800 font-medium border border-blue-200 hover:border-blue-400 rounded-lg px-3 py-1.5 transition-colors"
+            >
+              Change Shop
+            </button>
+          )}
+        </div>
+
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           {[
             { label: "Today", ...stats.today },
@@ -365,7 +384,6 @@ export default function QuoteView({
           ))}
         </div>
 
-        {/* TOOLBAR */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
@@ -379,14 +397,12 @@ export default function QuoteView({
           <button
             onClick={() => { if (!hasStaffRecord) return; setEditQuote(undefined); setShowPOS(true); }}
             disabled={!hasStaffRecord}
-            title={!hasStaffRecord ? "No staff record linked to your account" : undefined}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
             <Plus size={16} /> New Quote
           </button>
         </div>
 
-        {/* TABLE */}
         <div className="overflow-x-auto rounded-xl border bg-white shadow">
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-gray-50">
@@ -444,20 +460,13 @@ export default function QuoteView({
                           disabled={deletingId === q.id}
                           className="flex w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 items-center gap-2"
                         >
-                          {deletingId === q.id
-                            ? <Loader2 size={14} className="animate-spin" />
-                            : "🗑️"} Delete
+                          {deletingId === q.id ? <Loader2 size={14} className="animate-spin" /> : "🗑️"} Delete
                         </button>
                       </div>
                     )}
                   </td>
                 </tr>
               ))}
-              {filtered.length === 0 && (
-                <tr>
-                  <td colSpan={9} className="py-20 text-center text-gray-500">No quotes found</td>
-                </tr>
-              )}
             </tbody>
           </table>
         </div>
@@ -476,12 +485,10 @@ export default function QuoteView({
       )}
 
       {printQuote && (
-        <QuotePrintModal
-          quote={printQuote}
-          onClose={() => setPrintQuote(null)}
-        />
+        <QuotePrintModal quote={printQuote} onClose={() => setPrintQuote(null)} />
       )}
 
+      {/* NEW STANDALONE MODAL USAGE */}
       {convertQuote && (
         <ConvertModal
           quote={convertQuote}

@@ -1,10 +1,11 @@
+// app/reports/_components/ReportsView.tsx
 "use client";
 
 import { useState, useRef } from "react";
 import {
   TrendingUp, TrendingDown, ShoppingCart, FileText, CreditCard,
   DollarSign, Users, Package, Truck, BarChart3, Building2,
-  Wallet, ArrowUpDown, Star, Printer, Download,
+  Wallet, ArrowUpDown, Star, Printer,
 } from "lucide-react";
 
 type Summary = {
@@ -27,15 +28,18 @@ type Summary = {
 };
 
 type MonthlyData = { month: string; label: string; sales: number; expenses: number; profit: number };
-type ShopOption = { id: string; name: string };
+type ActiveShop = { id: string; name: string; location: string };
 
-type Props = { summary: Summary; monthlyData: MonthlyData[]; shops: ShopOption[] };
+type Props = {
+  summary: Summary;
+  monthlyData: MonthlyData[];
+  activeShop: ActiveShop;
+};
 
 type ReportType = "sales" | "payments" | "adjustments" | "stock" | "expenses" | "purchases" | "salaries" | "advance" | "overview";
 
-export default function ReportsView({ summary, monthlyData, shops }: Props) {
+export default function ReportsView({ summary, monthlyData, activeShop }: Props) {
   const [activeReport, setActiveReport] = useState<ReportType>("overview");
-  const [selectedShop, setSelectedShop] = useState("all");
   const printRef = useRef<HTMLDivElement>(null);
 
   const profit = summary.sales.amount - summary.expenses.amount;
@@ -48,7 +52,7 @@ export default function ReportsView({ summary, monthlyData, shops }: Props) {
     const win = window.open("", "_blank");
     if (!win) return;
     win.document.write(`
-      <html><head><title>Report — ${activeReport}</title>
+      <html><head><title>Report — ${activeReport} — ${activeShop.name}</title>
       <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Georgia', serif; padding: 32px; color: #111; }
@@ -95,29 +99,20 @@ export default function ReportsView({ summary, monthlyData, shops }: Props) {
               <BarChart3 size={26} className="text-emerald-400" />
               Reports & Analytics
             </h1>
-            <p className="text-sm text-gray-400 mt-0.5">Compiled business intelligence across all modules</p>
+            <p className="text-sm text-gray-400 mt-0.5">
+              {activeShop.name} · {activeShop.location}
+            </p>
           </div>
-          <div className="flex items-center gap-3">
-            <select
-              value={selectedShop}
-              onChange={(e) => setSelectedShop(e.target.value)}
-              className="border border-gray-700 bg-gray-800 text-white rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-500"
-            >
-              <option value="all">All Shops</option>
-              {shops.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-            <button
-              onClick={handlePrint}
-              className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors"
-            >
-              <Printer size={15} /> Print
-            </button>
-          </div>
+          <button
+            onClick={handlePrint}
+            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors"
+          >
+            <Printer size={15} /> Print
+          </button>
         </div>
       </div>
 
       <div className="mx-auto max-w-screen-2xl px-4 py-6 md:px-6 space-y-6">
-
         {/* REPORT TYPE TABS */}
         <div className="flex flex-wrap gap-2">
           {reportTypes.map((r) => (
@@ -135,32 +130,16 @@ export default function ReportsView({ summary, monthlyData, shops }: Props) {
           ))}
         </div>
 
-        {/* PRINT CONTENT */}
         <div ref={printRef}>
-
           {/* ─── OVERVIEW ─── */}
           {activeReport === "overview" && (
             <div className="space-y-6">
-              <PrintHeader title="Business Overview Report" />
-
-              {/* KEY METRICS */}
+              <PrintHeader title={`Business Overview — ${activeShop.name}`} />
               <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-                <DarkStatCard
-                  icon={<TrendingUp size={22} className="text-emerald-400" />}
-                  label="Total Revenue" value={`KSh ${summary.sales.amount.toLocaleString()}`}
-                  sub={`${summary.sales.count} sales`} color="emerald" />
-                <DarkStatCard
-                  icon={<TrendingDown size={22} className="text-rose-400" />}
-                  label="Total Expenses" value={`KSh ${summary.expenses.amount.toLocaleString()}`}
-                  sub={`${summary.expenses.count} records`} color="rose" />
-                <DarkStatCard
-                  icon={<Star size={22} className={profit >= 0 ? "text-emerald-400" : "text-rose-400"} />}
-                  label="Net Profit" value={`KSh ${profit.toLocaleString()}`}
-                  sub={profit >= 0 ? "Positive" : "Negative"} color={profit >= 0 ? "emerald" : "rose"} />
-                <DarkStatCard
-                  icon={<Building2 size={22} className="text-sky-400" />}
-                  label="Total Assets" value={`KSh ${summary.assets.amount.toLocaleString()}`}
-                  sub={`${summary.assets.count} items`} color="sky" />
+                <DarkStatCard icon={<TrendingUp size={22} className="text-emerald-400" />} label="Total Revenue" value={`KSh ${summary.sales.amount.toLocaleString()}`} sub={`${summary.sales.count} sales`} color="emerald" />
+                <DarkStatCard icon={<TrendingDown size={22} className="text-rose-400" />} label="Total Expenses" value={`KSh ${summary.expenses.amount.toLocaleString()}`} sub={`${summary.expenses.count} records`} color="rose" />
+                <DarkStatCard icon={<Star size={22} className={profit >= 0 ? "text-emerald-400" : "text-rose-400"} />} label="Net Profit" value={`KSh ${profit.toLocaleString()}`} sub={profit >= 0 ? "Positive" : "Negative"} color={profit >= 0 ? "emerald" : "rose"} />
+                <DarkStatCard icon={<Building2 size={22} className="text-sky-400" />} label="Total Assets" value={`KSh ${summary.assets.amount.toLocaleString()}`} sub={`${summary.assets.count} items`} color="sky" />
               </div>
 
               {/* MONTHLY CHART */}
@@ -172,16 +151,8 @@ export default function ReportsView({ summary, monthlyData, shops }: Props) {
                   {monthlyData.map((m) => (
                     <div key={m.month} className="flex flex-col items-center gap-1 flex-1 min-w-[52px]">
                       <div className="flex items-end gap-1 h-40">
-                        <div
-                          style={{ height: `${Math.round((m.sales / maxSales) * 100)}%` }}
-                          className="w-5 bg-emerald-500 rounded-t-lg transition-all min-h-[2px]"
-                          title={`Sales: KSh ${m.sales.toLocaleString()}`}
-                        />
-                        <div
-                          style={{ height: `${Math.round((m.expenses / maxSales) * 100)}%` }}
-                          className="w-5 bg-rose-500 rounded-t-lg transition-all min-h-[2px]"
-                          title={`Expenses: KSh ${m.expenses.toLocaleString()}`}
-                        />
+                        <div style={{ height: `${Math.round((m.sales / maxSales) * 100)}%` }} className="w-5 bg-emerald-500 rounded-t-lg min-h-[2px]" title={`Sales: KSh ${m.sales.toLocaleString()}`} />
+                        <div style={{ height: `${Math.round((m.expenses / maxSales) * 100)}%` }} className="w-5 bg-rose-500 rounded-t-lg min-h-[2px]" title={`Expenses: KSh ${m.expenses.toLocaleString()}`} />
                       </div>
                       <span className="text-xs text-gray-500">{m.label}</span>
                     </div>
@@ -193,7 +164,7 @@ export default function ReportsView({ summary, monthlyData, shops }: Props) {
                 </div>
               </div>
 
-              {/* ALL MODULES SUMMARY TABLE */}
+              {/* SUMMARY TABLE */}
               <div className="rounded-2xl bg-gray-900 border border-gray-800 overflow-hidden">
                 <div className="px-6 py-4 border-b border-gray-800">
                   <h2 className="text-base font-bold text-white">All Modules Summary</h2>
@@ -226,7 +197,7 @@ export default function ReportsView({ summary, monthlyData, shops }: Props) {
                         { module: "📈 Margins", records: summary.margins.count, amount: `KSh ${summary.margins.amount.toLocaleString()}`, note: "Profit margins" },
                         { module: "💼 Transactions", records: summary.transactions.count, amount: `KSh ${summary.transactions.amount.toLocaleString()}`, note: "Wallet transactions" },
                       ].map((row) => (
-                        <tr key={row.module} className="hover:bg-gray-800/40 transition-colors">
+                        <tr key={row.module} className="hover:bg-gray-800/40">
                           <td className="px-5 py-3.5 font-semibold text-white">{row.module}</td>
                           <td className="px-5 py-3.5 text-gray-300">{row.records.toLocaleString()}</td>
                           <td className="px-5 py-3.5 text-emerald-400 font-semibold">{row.amount}</td>
@@ -238,7 +209,6 @@ export default function ReportsView({ summary, monthlyData, shops }: Props) {
                 </div>
               </div>
 
-              {/* PROFIT SUMMARY */}
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <SummaryBlock title="Revenue Breakdown" items={[
                   { label: "Sales Revenue", value: `KSh ${summary.sales.amount.toLocaleString()}`, positive: true },
@@ -260,7 +230,6 @@ export default function ReportsView({ summary, monthlyData, shops }: Props) {
             </div>
           )}
 
-          {/* ─── SALES REPORT ─── */}
           {activeReport === "sales" && (
             <ReportSection
               title="Sales Report"
@@ -274,7 +243,6 @@ export default function ReportsView({ summary, monthlyData, shops }: Props) {
             />
           )}
 
-          {/* ─── PAYMENTS REPORT ─── */}
           {activeReport === "payments" && (
             <ReportSection
               title="Payments Report"
@@ -288,7 +256,6 @@ export default function ReportsView({ summary, monthlyData, shops }: Props) {
             />
           )}
 
-          {/* ─── EXPENSES REPORT ─── */}
           {activeReport === "expenses" && (
             <ReportSection
               title="Expenses Report"
@@ -302,7 +269,6 @@ export default function ReportsView({ summary, monthlyData, shops }: Props) {
             />
           )}
 
-          {/* ─── PURCHASES REPORT ─── */}
           {activeReport === "purchases" && (
             <ReportSection
               title="Purchases Report"
@@ -316,7 +282,6 @@ export default function ReportsView({ summary, monthlyData, shops }: Props) {
             />
           )}
 
-          {/* ─── SALARIES REPORT ─── */}
           {activeReport === "salaries" && (
             <ReportSection
               title="Salaries & Payroll Report"
@@ -330,7 +295,6 @@ export default function ReportsView({ summary, monthlyData, shops }: Props) {
             />
           )}
 
-          {/* ─── ADVANCE REPORT ─── */}
           {activeReport === "advance" && (
             <ReportSection
               title="Staff Advances Report"
@@ -344,7 +308,6 @@ export default function ReportsView({ summary, monthlyData, shops }: Props) {
             />
           )}
 
-          {/* ─── ADJUSTMENTS REPORT ─── */}
           {activeReport === "adjustments" && (
             <ReportSection
               title="Stock Adjustments Report"
@@ -358,7 +321,6 @@ export default function ReportsView({ summary, monthlyData, shops }: Props) {
             />
           )}
 
-          {/* ─── STOCK REPORT ─── */}
           {activeReport === "stock" && (
             <ReportSection
               title="Stock & Inventory Report"
@@ -371,14 +333,11 @@ export default function ReportsView({ summary, monthlyData, shops }: Props) {
               chart={null}
             />
           )}
-
         </div>
       </div>
     </div>
   );
 }
-
-/* ── SUB COMPONENTS ── */
 
 function PrintHeader({ title }: { title: string }) {
   return (
@@ -397,8 +356,6 @@ function DarkStatCard({ icon, label, value, sub, color }: {
     emerald: "border-emerald-800/40 bg-emerald-950/40",
     rose: "border-rose-800/40 bg-rose-950/40",
     sky: "border-sky-800/40 bg-sky-950/40",
-    amber: "border-amber-800/40 bg-amber-950/40",
-    violet: "border-violet-800/40 bg-violet-950/40",
   };
   return (
     <div className={`rounded-2xl border p-5 ${colors[color] ?? colors.emerald}`}>
@@ -420,9 +377,7 @@ function SummaryBlock({ title, items }: { title: string; items: { label: string;
         {items.map((item) => (
           <div key={item.label} className="flex justify-between items-center">
             <span className="text-sm text-gray-400">{item.label}</span>
-            <span className={`text-sm font-bold ${item.positive ? "text-emerald-400" : "text-rose-400"}`}>
-              {item.value}
-            </span>
+            <span className={`text-sm font-bold ${item.positive ? "text-emerald-400" : "text-rose-400"}`}>{item.value}</span>
           </div>
         ))}
       </div>
@@ -434,21 +389,14 @@ function MiniChart({ data, valueKey, color, label }: {
   data: MonthlyData[]; valueKey: "sales" | "expenses" | "profit"; color: string; label: string;
 }) {
   const max = Math.max(...data.map((d) => d[valueKey]), 1);
-  const colorMap: Record<string, string> = {
-    emerald: "bg-emerald-500",
-    rose: "bg-rose-500",
-    sky: "bg-sky-500",
-  };
+  const colorMap: Record<string, string> = { emerald: "bg-emerald-500", rose: "bg-rose-500", sky: "bg-sky-500" };
   return (
     <div className="rounded-2xl bg-gray-900 border border-gray-800 p-5">
       <h3 className="text-sm font-bold text-gray-300 mb-4">{label}</h3>
       <div className="flex items-end gap-1.5 h-32">
         {data.map((m) => (
           <div key={m.month} className="flex flex-col items-center gap-1 flex-1">
-            <div
-              style={{ height: `${Math.round((m[valueKey] / max) * 100)}%` }}
-              className={`w-full ${colorMap[color] ?? "bg-emerald-500"} rounded-t min-h-[2px] transition-all`}
-            />
+            <div style={{ height: `${Math.round((m[valueKey] / max) * 100)}%` }} className={`w-full ${colorMap[color] ?? "bg-emerald-500"} rounded-t min-h-[2px]`} />
             <span className="text-xs text-gray-600 truncate w-full text-center">{m.label}</span>
           </div>
         ))}
@@ -458,8 +406,7 @@ function MiniChart({ data, valueKey, color, label }: {
 }
 
 function ReportSection({ title, icon, cards, chart }: {
-  title: string;
-  icon: React.ReactNode;
+  title: string; icon: React.ReactNode;
   cards: { label: string; value: string | number; sub: string }[];
   chart: React.ReactNode;
 }) {
@@ -469,7 +416,6 @@ function ReportSection({ title, icon, cards, chart }: {
         <div className="p-2 bg-gray-800 rounded-xl">{icon}</div>
         <h2 className="text-lg font-bold text-white">{title}</h2>
       </div>
-
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         {cards.map((c) => (
           <div key={c.label} className="rounded-2xl bg-gray-900 border border-gray-800 p-5">
@@ -479,7 +425,6 @@ function ReportSection({ title, icon, cards, chart }: {
           </div>
         ))}
       </div>
-
       {chart}
     </div>
   );
