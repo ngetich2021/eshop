@@ -1,73 +1,83 @@
+// app/staff/advance/page.tsx
 import { auth } from "@/auth";
+import { redirect } from "next/navigation";
 import prisma from "@/lib/prisma";
-import AdvancesView from "./_components/AdvancesView";
+import { resolveActiveShop } from "@/lib/active-shop";
+import AdvanceView from "../../finance/advance/_components/Advanceview";
 
 export default async function AdvancePage() {
   const session = await auth();
-  if (!session?.user?.id) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        Please sign in
-      </div>
-    );
-  }
+  if (!session?.user?.id) redirect("/login");
 
-  const userId = session.user.id;
+  const { activeShopId, activeShop, isAdmin } = await resolveActiveShop(session.user.id);
+
+  // Resolve role
   const profile = await prisma.profile.findUnique({
-    where: { userId },
+    where: { userId: session.user.id },
     select: { role: true },
   });
-  const isAdmin = profile?.role?.toLowerCase().trim() === "admin";
+  const role = profile?.role?.toLowerCase().trim();
+  const isManager = role === "manager" || isAdmin;
 
-  const staffList = await prisma.staff.findMany({
-    select: { id: true, fullName: true },
-    orderBy: { fullName: "asc" },
+  // Current user's Staff record in this shop
+  const currentStaff = await prisma.staff.findFirst({
+    where: { userId: session.user.id, shopId: activeShopId },
+    select: { id: true, fullName: true, baseSalary: true },
   });
+  const isStaff = !!currentStaff && !isManager;
 
-  const shops = await prisma.shop.findMany({
-    select: { id: true, name: true },
-    orderBy: { name: "asc" },
-  });
-
-  const advancesRaw = await prisma.advance.findMany({
-    where: isAdmin ? undefined : { shop: { userId } },
+  // Managers see ALL advances for the shop; staff see only their own
+  const raw = await prisma.advance.findMany({
+    where: {
+      shopId: activeShopId,
+      ...(isStaff && currentStaff ? { staffId: currentStaff.id } : {}),
+    },
     select: {
       id: true,
       amount: true,
       date: true,
-      status: true,
       reason: true,
+      status: true,
       transactionCode: true,
-      staffId: true,
-      staff: { select: { fullName: true } },
-      shop: { select: { name: true } },
       shopId: true,
+      staffId: true,
+      staff: { select: { fullName: true, baseSalary: true } },
+      shop: { select: { name: true } },
+      createdAt: true,
     },
     orderBy: { createdAt: "desc" },
   });
 
-  const advances = advancesRaw.map((a) => ({
+  const advances = raw.map((a) => ({
     id: a.id,
     staffName: a.staff.fullName,
     staffId: a.staffId,
     amount: a.amount,
     date: a.date.toISOString().split("T")[0],
+    reason: a.reason ?? null,
     status: a.status,
+    transactionCode: a.transactionCode ?? null,
     shop: a.shop.name,
     shopId: a.shopId,
-    reason: a.reason ?? null,
-    transactionCode: a.transactionCode ?? null,
+    baseSalary: a.staff.baseSalary,
+    createdAt: a.createdAt.toISOString().split("T")[0],
   }));
 
-  const totalAdvances = advances.length;
-  const totalAmount = advances.reduce((sum, a) => sum + a.amount, 0);
+  const totalAdvance = advances.reduce((s, a) => s + a.amount, 0);
+  const pendingAdvance = advances
+    .filter((a) => a.status === "requested" || a.status === "approved")
+    .reduce((s, a) => s + a.amount, 0);
+  const approvedCount = advances.filter((a) => a.status === "approved").length;
 
   return (
-    <AdvancesView
-      stats={{ totalAdvances, totalAmount }}
+    <AdvanceView
+      activeShop={activeShop}
+      isStaff={isStaff}
+      isAdmin={isAdmin}
+      isManager={isManager}
+      currentStaff={currentStaff}
+      stats={{ totalAdvances: advances.length, totalAdvance, pendingAdvance, approvedCount }}
       advances={advances}
-      staffList={staffList}
-      shops={shops}
     />
   );
 }

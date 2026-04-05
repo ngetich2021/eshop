@@ -1,15 +1,17 @@
-// app/assets/page.tsx
 import { auth } from "@/auth";
 import { redirect } from "next/navigation";
 import prisma from "@/lib/prisma";
 import { resolveActiveShop } from "@/lib/active-shop";
 import AssetsView from "./_components/AssetsView";
+import { logPageVisit } from "@/lib/log-activity";
 
 export default async function AssetsPage() {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
 
-  const { activeShopId, activeShop, isStaff, isAdmin } = await resolveActiveShop(session.user.id);
+  logPageVisit(session.user.id, "/assets");
+
+  const { activeShopId, activeShop } = await resolveActiveShop(session.user.id);
 
   const raw = await prisma.asset.findMany({
     where: { shopId: activeShopId },

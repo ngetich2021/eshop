@@ -1,245 +1,220 @@
 // app/payroll/_components/PayrollView.tsx
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
-import { Search, Loader2, MoreVertical, TrendingUp, AlertCircle, Banknote, Users, TrendingDown, RefreshCw } from "lucide-react";
+import { useEffect, useState, useTransition, useCallback, useRef } from "react";
+import { Search, Loader2, MoreVertical, TrendingUp, AlertCircle, Banknote, Users, TrendingDown, RefreshCw, Trash2, BadgeCheck } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { createPortal } from "react-dom";
 import { updatePayrollStatusAction, deletePayrollAction } from "./actions";
 
-type Payroll = {
-  id: string;
-  staffName: string;
-  staffId: string;
-  salary: number;
-  payable: number;
-  advances: number;
-  status: string;
-  shop: string;
-  shopId: string;
-  date: string;
-  isCurrentMonth: boolean;
-};
-
+type Payroll    = { id: string; staffName: string; staffId: string; salary: number; payable: number; advances: number; status: string; shop: string; shopId: string; date: string; isCurrentMonth: boolean };
 type StaffOption = { id: string; fullName: string };
 type ActiveShop = { id: string; name: string; location: string };
-
-type Props = {
-  activeShop: ActiveShop;
-  isManager: boolean;
-  currentMonth: string;
+type Props      = {
+  activeShop: ActiveShop; isManager: boolean; currentMonth: string;
   stats: { totalPayrolls: number; totalDue: number; totalSalary: number; totalPayable: number; totalDeductions: number };
-  payrolls: Payroll[];
-  staffList: StaffOption[];
+  payrolls: Payroll[]; staffList: StaffOption[];
 };
+
+type DDState = { id: string | null; top: number; left: number };
+function usePortalDropdown() {
+  const [dd, setDd] = useState<DDState>({ id: null, top: 0, left: 0 });
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const close = useCallback(() => setDd({ id: null, top: 0, left: 0 }), []);
+  useEffect(() => {
+    if (!dd.id) return;
+    const h = (e: MouseEvent) => { if (menuRef.current?.contains(e.target as Node)) return; close(); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [dd.id, close]);
+  const open = useCallback((id: string, e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    if (dd.id === id) { close(); return; }
+    const r = e.currentTarget.getBoundingClientRect();
+    const dw = 180, gap = 6, dh = menuRef.current?.offsetHeight ?? 160;
+    let top = r.bottom + gap, left = r.right - dw;
+    if (top + dh > window.innerHeight - gap) top = r.top - dh - gap;
+    if (top < gap) top = gap; if (left < gap) left = gap;
+    if (left + dw > window.innerWidth - gap) left = window.innerWidth - dw - gap;
+    setDd({ id, top, left });
+  }, [dd.id, close]);
+  return { dd, open, close, menuRef };
+}
 
 export default function PayrollView({ activeShop, isManager, currentMonth, stats, payrolls }: Props) {
   const router = useRouter();
-  const [search, setSearch] = useState("");
+  const [search, setSearch]         = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [payingId, setPayingId] = useState<string | null>(null);
-  const [openDropdownId, setOpenDropdownId] = useState<string | null>(null);
-  const [dropdownTop, setDropdownTop] = useState(0);
-  const [dropdownLeft, setDropdownLeft] = useState(0);
-  const [isPending, startTransition] = useTransition();
+  const [payingId, setPayingId]     = useState<string | null>(null);
   const [filterMonth, setFilterMonth] = useState(currentMonth);
-
-  useEffect(() => {
-    if (!openDropdownId) return;
-    const close = () => setOpenDropdownId(null);
-    document.addEventListener("click", close);
-    return () => document.removeEventListener("click", close);
-  }, [openDropdownId]);
-
-  const toggleDropdown = (id: string, e: React.MouseEvent<HTMLButtonElement>) => {
-    e.stopPropagation();
-    if (openDropdownId === id) { setOpenDropdownId(null); return; }
-    const rect = e.currentTarget.getBoundingClientRect();
-    const gap = 8, dw = 160, dh = 100;
-    let top = rect.bottom + gap, left = rect.right - dw;
-    if (top + dh > window.innerHeight) top = rect.top - dh - gap;
-    if (left < gap) left = gap;
-    if (left + dw > window.innerWidth - gap) left = window.innerWidth - dw - gap;
-    setDropdownTop(top); setDropdownLeft(left); setOpenDropdownId(id);
-  };
+  const [, startTransition]         = useTransition();
+  const { dd, open, close, menuRef } = usePortalDropdown();
 
   const handleDelete = async (id: string) => {
+    close();
     if (!confirm("Delete this payroll record?")) return;
     setDeletingId(id);
     const res = await deletePayrollAction(id);
     setDeletingId(null);
-    if (res.success) router.refresh();
-    else alert(res.error || "Delete failed");
-    setOpenDropdownId(null);
+    if (res.success) router.refresh(); else alert(res.error || "Delete failed");
   };
 
   const handleMarkPaid = (id: string) => {
+    close();
     if (!confirm("Mark this payroll as paid?")) return;
     setPayingId(id);
     startTransition(async () => {
       const res = await updatePayrollStatusAction(id, "paid");
       setPayingId(null);
-      if (res.success) router.refresh();
-      else alert(res.error || "Failed");
+      if (res.success) router.refresh(); else alert(res.error || "Failed");
     });
   };
 
-  const allMonths = Array.from(new Set(payrolls.map((p) => p.date.substring(0, 7)))).sort().reverse();
-  const formatMonth = (m: string) => {
-    const [y, mo] = m.split("-");
-    return new Date(Number(y), Number(mo) - 1, 1).toLocaleDateString("en-KE", { month: "short", year: "numeric" });
-  };
-
-  const filtered = payrolls.filter((p) => {
+  const allMonths   = Array.from(new Set(payrolls.map((p) => p.date.substring(0, 7)))).sort().reverse();
+  const formatMonth = (m: string) => { const [y, mo] = m.split("-"); return new Date(Number(y), Number(mo) - 1, 1).toLocaleDateString("en-KE", { month: "short", year: "numeric" }); };
+  const filtered    = payrolls.filter((p) => {
     const matchSearch = `${p.staffName} ${p.status} ${p.shop}`.toLowerCase().includes(search.toLowerCase());
-    const matchMonth = filterMonth === "all" || p.date.startsWith(filterMonth);
-    return matchSearch && matchMonth;
+    return matchSearch && (filterMonth === "all" || p.date.startsWith(filterMonth));
   });
-
-  const statusColor = (status: string) =>
-    status === "paid" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700";
+  const ddPayroll = dd.id ? payrolls.find((p) => p.id === dd.id) : null;
 
   return (
-    <div className="min-h-screen bg-slate-50 px-4 py-6 md:px-6">
-      <div className="mx-auto max-w-screen-2xl space-y-6">
-
-        {/* SHOP BANNER */}
-        <div className="flex items-center justify-between rounded-xl border bg-white px-5 py-3 shadow-sm">
-          <div>
-            <div className="text-xs text-gray-500 font-medium uppercase tracking-wide">Active Shop</div>
-            <div className="font-bold text-gray-900">{activeShop.name}</div>
-            <div className="text-xs text-gray-400">{activeShop.location}</div>
+    <>
+      <style>{`
+        .prl-table .col-sticky{position:sticky;left:0;z-index:10;box-shadow:6px 0 18px -6px rgba(0,0,0,0.06);clip-path:inset(0px -30px 0px 0px);}
+        .prl-table thead .col-sticky{z-index:20;}
+        .prl-scroll-wrap{position:relative}
+        .prl-scroll-wrap::after{content:'';position:absolute;top:0;right:0;bottom:0;width:48px;background:linear-gradient(to right,transparent,rgba(248,250,252,0.7));pointer-events:none;z-index:5;border-radius:0 16px 16px 0}
+        @keyframes rowIn{from{opacity:0;transform:translateX(-6px)}to{opacity:1;transform:translateX(0)}}
+        .prl-table tbody tr{animation:rowIn 0.18s ease both}
+        @keyframes ddIn{from{opacity:0;transform:scale(0.95) translateY(-4px)}to{opacity:1;transform:scale(1) translateY(0)}}
+        .dd-menu{animation:ddIn 0.12s ease both;transform-origin:top right}
+      `}</style>
+      <div className="min-h-screen bg-slate-50/80 px-3 py-5 md:px-6">
+        <div className="mx-auto max-w-screen-2xl space-y-5">
+          <div className="flex items-center justify-between rounded-xl border bg-white px-5 py-3 shadow-sm">
+            <div>
+              <div className="text-[0.63rem] font-bold uppercase tracking-widest text-gray-400">Active Shop</div>
+              <div className="font-bold text-gray-900">{activeShop.name}</div>
+              <div className="text-xs text-gray-400">{activeShop.location}</div>
+            </div>
+            <button onClick={() => router.refresh()} className="flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-800 border border-blue-200 hover:border-blue-400 rounded-lg px-3 py-1.5 transition-colors">
+              <RefreshCw size={13} /> Refresh
+            </button>
           </div>
-          <button
-            onClick={() => router.refresh()}
-            className="flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-800 border border-blue-200 rounded-lg px-3 py-1.5"
-          >
-            <RefreshCw size={14} /> Refresh
-          </button>
-        </div>
-
-        {/* STATS */}
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-          <StatCard icon={<Users size={20} className="text-indigo-600" />} label="Records" value={stats.totalPayrolls} bg="bg-indigo-50" />
-          <StatCard icon={<Banknote size={20} className="text-emerald-600" />} label="Total Salary" value={`KSh ${stats.totalSalary.toLocaleString()}`} bg="bg-emerald-50" />
-          <StatCard icon={<TrendingDown size={20} className="text-red-500" />} label="Deductions" value={`KSh ${stats.totalDeductions.toLocaleString()}`} bg="bg-red-50" />
-          <StatCard icon={<TrendingUp size={20} className="text-sky-600" />} label="Net Payable" value={`KSh ${stats.totalPayable.toLocaleString()}`} bg="bg-sky-50" />
-          <StatCard icon={<AlertCircle size={20} className="text-rose-600" />} label="Pending Due" value={`KSh ${stats.totalDue.toLocaleString()}`} bg="bg-rose-50" />
-        </div>
-
-        {/* TOOLBAR */}
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="relative flex-1 max-w-md">
-            <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search payroll..."
-              className="w-full rounded-xl border border-gray-200 bg-white pl-10 py-2.5 text-sm shadow-sm focus:border-indigo-400 outline-none" />
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              onClick={() => setFilterMonth("all")}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-all ${filterMonth === "all" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-600 border-gray-300"}`}
-            >All</button>
-            {allMonths.slice(0, 6).map((m) => (
-              <button key={m} onClick={() => setFilterMonth(m)}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-all ${filterMonth === m ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-600 border-gray-300"}`}
-              >
-                {formatMonth(m)}
-              </button>
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+            {[
+              { icon: <Users size={18} className="text-indigo-600" />,     label: "Records",      value: stats.totalPayrolls,                            accent: "bg-indigo-500" },
+              { icon: <Banknote size={18} className="text-emerald-600" />, label: "Total Salary", value: `KSh ${stats.totalSalary.toLocaleString()}`,    accent: "bg-emerald-500" },
+              { icon: <TrendingDown size={18} className="text-red-500" />, label: "Deductions",   value: `KSh ${stats.totalDeductions.toLocaleString()}`,accent: "bg-red-500" },
+              { icon: <TrendingUp size={18} className="text-sky-600" />,   label: "Net Payable",  value: `KSh ${stats.totalPayable.toLocaleString()}`,   accent: "bg-sky-500" },
+              { icon: <AlertCircle size={18} className="text-rose-600" />, label: "Pending Due",  value: `KSh ${stats.totalDue.toLocaleString()}`,       accent: "bg-rose-500" },
+            ].map((s) => (
+              <div key={s.label} className="relative overflow-hidden rounded-xl border border-gray-100 bg-white px-4 pt-4 pb-3 shadow-sm">
+                <div className={`absolute top-0 left-0 right-0 h-0.5 ${s.accent}`} />
+                <div className="flex items-center gap-2 mb-1.5"><div className="p-1.5 bg-gray-50 rounded-lg">{s.icon}</div><p className="text-[0.63rem] font-bold uppercase tracking-widest text-gray-400">{s.label}</p></div>
+                <p className="text-2xl font-black tabular-nums text-gray-900">{s.value}</p>
+              </div>
             ))}
           </div>
-        </div>
-
-        {/* TABLE */}
-        <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow-sm">
-          <table className="w-full min-w-[900px] text-sm">
-            <thead>
-              <tr className="border-b border-gray-100 bg-gray-50/80">
-                {["S/NO", "Full Name", "Base Salary", "Advances", "Net Payable", "Status", "Date", "Actions"].map((h) => (
-                  <th key={h} className="px-5 py-4 text-left text-xs font-bold uppercase tracking-wider text-gray-500 last:text-center">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {filtered.map((p, i) => (
-                <tr key={p.id} className="hover:bg-indigo-50/40 transition-colors">
-                  <td className="px-5 py-4 text-gray-400 text-xs">{String(i + 1).padStart(2, "0")}</td>
-                  <td className="px-5 py-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-xs">
-                        {p.staffName.charAt(0)}
-                      </div>
-                      <div>
-                        <span className="font-semibold text-gray-800">{p.staffName}</span>
-                        {p.isCurrentMonth && <div className="text-xs text-indigo-500 font-medium">Current month</div>}
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-5 py-4 text-gray-700 font-semibold">KSh {p.salary.toLocaleString()}</td>
-                  <td className="px-5 py-4">
-                    {p.advances > 0
-                      ? <span className="text-red-600 font-semibold">- KSh {p.advances.toLocaleString()}</span>
-                      : <span className="text-gray-400">—</span>}
-                  </td>
-                  <td className="px-5 py-4 font-bold text-indigo-700">KSh {p.payable.toLocaleString()}</td>
-                  <td className="px-5 py-4">
-                    <span className={`px-3 py-1 rounded-full text-xs font-semibold ${statusColor(p.status)}`}>{p.status}</span>
-                  </td>
-                  <td className="px-5 py-4 text-gray-500 text-xs">{p.date}</td>
-                  <td className="px-5 py-4 text-center" onClick={(e) => e.stopPropagation()}>
-                    <div className="flex items-center justify-center gap-1">
-                      {isManager && p.status === "pending" && (
-                        <button
-                          onClick={() => handleMarkPaid(p.id)}
-                          disabled={payingId === p.id}
-                          className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-semibold rounded-lg flex items-center gap-1"
-                        >
-                          {payingId === p.id ? <Loader2 size={12} className="animate-spin" /> : "✓ Pay"}
-                        </button>
-                      )}
-                      <button onClick={(e) => toggleDropdown(p.id, e)} className="p-2 hover:bg-gray-100 rounded-xl">
-                        <MoreVertical size={18} className="text-gray-400" />
-                      </button>
-                    </div>
-                    {openDropdownId === p.id && (
-                      <div className="fixed z-[10000] w-44 bg-white border border-gray-100 rounded-2xl shadow-xl py-1.5"
-                        style={{ top: `${dropdownTop}px`, left: `${dropdownLeft}px` }}>
-                        {isManager && p.status === "pending" && (
-                          <button onClick={() => { setOpenDropdownId(null); handleMarkPaid(p.id); }}
-                            className="block w-full text-left px-4 py-2.5 text-sm hover:bg-emerald-50 text-emerald-700 font-medium">
-                            ✓ Mark as Paid
-                          </button>
-                        )}
-                        <div className="my-1 border-t border-gray-100" />
-                        <button onClick={() => handleDelete(p.id)} disabled={deletingId === p.id}
-                          className="w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2">
-                          {deletingId === p.id ? <Loader2 size={14} className="animate-spin" /> : "🗑️"} Delete
-                        </button>
-                      </div>
-                    )}
-                  </td>
-                </tr>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="relative flex-1 max-w-md">
+              <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search payroll…" className="w-full rounded-xl border border-gray-200 bg-white pl-9 pr-3 py-2 text-xs focus:border-indigo-400 focus:outline-none shadow-sm transition" />
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button onClick={() => setFilterMonth("all")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${filterMonth === "all" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-600 border-gray-300"}`}>All</button>
+              {allMonths.slice(0, 6).map((m) => (
+                <button key={m} onClick={() => setFilterMonth(m)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${filterMonth === m ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-600 border-gray-300"}`}>{formatMonth(m)}</button>
               ))}
-              {filtered.length === 0 && (
-                <tr><td colSpan={8} className="py-24 text-center text-gray-400">
-                  <Banknote size={40} className="mx-auto mb-3 opacity-20" />
-                  No payroll records found
-                </td></tr>
-              )}
-            </tbody>
-          </table>
+            </div>
+          </div>
+          <div className="prl-scroll-wrap rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="prl-table w-full min-w-[860px] text-sm border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-gray-200">
+                    <th className="col-sticky px-4 py-3.5 text-left" style={{ backgroundColor: "#f8fafc" }}>
+                      <div className="flex items-center gap-3">
+                        <span className="text-[0.68rem] font-bold uppercase tracking-widest text-gray-400 w-5">#</span>
+                        <span className="text-[0.68rem] font-bold uppercase tracking-widest text-gray-400">Full Name</span>
+                      </div>
+                    </th>
+                    {["Base Salary","Advances","Net Payable","Status","Date","Actions"].map((h) => (
+                      <th key={h} className={`px-4 py-3.5 text-[0.68rem] font-bold uppercase tracking-widest text-gray-400 whitespace-nowrap ${h === "Actions" ? "text-center" : "text-left"}`}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filtered.map((p, i) => (
+                    <tr key={p.id} className="bg-white hover:bg-slate-50 transition-colors duration-100" style={{ animationDelay: `${i * 0.025}s` }}
+                      onMouseEnter={(e) => { const td = e.currentTarget.querySelector<HTMLElement>(".col-sticky"); if (td) td.style.backgroundColor = "#f8fafc"; }}
+                      onMouseLeave={(e) => { const td = e.currentTarget.querySelector<HTMLElement>(".col-sticky"); if (td) td.style.backgroundColor = "#ffffff"; }}
+                    >
+                      <td className="col-sticky px-4 py-3" style={{ backgroundColor: "#ffffff" }}>
+                        <div className="flex items-center gap-3">
+                          <span className="text-[0.7rem] font-bold text-gray-300 w-5 text-center tabular-nums shrink-0">{i + 1}</span>
+                          <div className="w-8 h-8 shrink-0 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-black text-xs">{p.staffName.charAt(0)}</div>
+                          <div className="min-w-0">
+                            <p className="font-semibold text-gray-800 truncate max-w-[130px] text-[0.82rem]">{p.staffName}</p>
+                            {p.isCurrentMonth && <p className="text-[0.63rem] text-indigo-500 font-semibold">Current month</p>}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3"><span className="tabular-nums text-[0.82rem] font-bold text-gray-700">KSh {p.salary.toLocaleString()}</span></td>
+                      <td className="px-4 py-3">{p.advances > 0 ? <span className="tabular-nums text-[0.82rem] font-bold text-red-600">- KSh {p.advances.toLocaleString()}</span> : <span className="text-gray-400 text-xs">—</span>}</td>
+                      <td className="px-4 py-3"><span className="tabular-nums text-[0.82rem] font-black text-indigo-700">KSh {p.payable.toLocaleString()}</span></td>
+                      <td className="px-4 py-3"><span className={`inline-block rounded-full border px-2.5 py-0.5 text-[0.68rem] font-bold capitalize ${p.status === "paid" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"}`}>{p.status}</span></td>
+                      <td className="px-4 py-3"><span className="text-[0.73rem] text-gray-400 whitespace-nowrap">{p.date}</span></td>
+                      <td className="px-4 py-3 text-center" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-center gap-1">
+                          {isManager && p.status === "pending" && (
+                            <button onClick={() => handleMarkPaid(p.id)} disabled={payingId === p.id}
+                              className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-semibold rounded-lg flex items-center gap-1 transition-colors">
+                              {payingId === p.id ? <Loader2 size={11} className="animate-spin" /> : "✓ Pay"}
+                            </button>
+                          )}
+                          <button onClick={(e) => open(p.id, e)} className={`rounded-lg p-1.5 transition-colors ${dd.id === p.id ? "bg-gray-200 text-gray-700" : "hover:bg-gray-100 text-gray-400"}`}><MoreVertical size={15} /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {filtered.length === 0 && (
+                    <tr><td colSpan={8} className="py-24 text-center">
+                      <div className="flex flex-col items-center gap-3 text-gray-300"><Banknote size={38} strokeWidth={1} /><p className="text-sm font-semibold text-gray-400">No payroll records found</p></div>
+                    </td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </div>
-    </div>
-  );
-}
 
-function StatCard({ icon, label, value, bg }: { icon: React.ReactNode; label: string; value: string | number; bg: string }) {
-  return (
-    <div className={`rounded-2xl border border-gray-100 ${bg} p-4 shadow-sm`}>
-      <div className="flex items-center gap-3 mb-2">
-        <div className="p-2 bg-white rounded-xl shadow-sm">{icon}</div>
-        <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">{label}</span>
-      </div>
-      <div className="text-2xl font-bold text-gray-900">{value}</div>
-    </div>
+      {dd.id && ddPayroll && typeof document !== "undefined" && createPortal(
+        <div ref={menuRef} className="dd-menu fixed z-[99999] w-[176px] bg-white rounded-2xl shadow-2xl border border-gray-100 py-1.5 overflow-hidden" style={{ top: dd.top, left: dd.left }}>
+          <div className="px-3 py-2 border-b border-gray-50 mb-1">
+            <p className="text-[0.63rem] font-bold uppercase tracking-widest text-gray-400">Payroll</p>
+            <p className="text-xs font-semibold text-gray-700 truncate">{ddPayroll.staffName}</p>
+          </div>
+          {isManager && ddPayroll.status === "pending" && (
+            <button onClick={() => handleMarkPaid(ddPayroll.id)} disabled={payingId === ddPayroll.id}
+              className="flex w-full items-center gap-2.5 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-emerald-50 hover:text-emerald-700 transition-colors disabled:opacity-50">
+              <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+                {payingId === ddPayroll.id ? <Loader2 size={12} className="animate-spin" /> : <BadgeCheck size={12} />}
+              </span> Mark as Paid
+            </button>
+          )}
+          <div className="my-1 border-t border-gray-100" />
+          <button onClick={() => handleDelete(ddPayroll.id)} disabled={deletingId === ddPayroll.id}
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-xs font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50">
+            <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-red-50 text-red-500">
+              {deletingId === ddPayroll.id ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+            </span> Delete
+          </button>
+        </div>,
+        document.body
+      )}
+    </>
   );
 }

@@ -1,93 +1,87 @@
-// middleware.ts
-import { auth } from "@/auth";
+// middleware.ts  (project root)
+// ─────────────────────────────────────────────────────────────────────────────
+// Rules:
+//   • /dashboard        — always allowed for any authenticated user
+//   • /api/auth/**      — always public (OAuth callbacks live here)
+//   • admin role        — full access everywhere
+//   • staff role        — allowed if pathname starts with one of their
+//                         allowedRoutes prefixes (e.g. "/sales")
+//   • user role / guest — redirect to /
+// ─────────────────────────────────────────────────────────────────────────────
+import { auth }         from "@/auth";
 import { NextResponse } from "next/server";
 
-const protectedRoutes = [
-  "/welcome",
-  "/dashboard",
-  "/dashboard/:path*",
-  "/inventory",
-  "/inventory/:path*",
-  "/sales",
-  "/sales/:path*",
-  "/reports",
-  "/reports/:path*",
-  "/staff",
-  "/staff/:path*",
-   "/suppliers",
-  "/suppliers/:path*",
-   "/payments",
-  "/payments/:path*",
-    "/finance",
-  "/finance/:path*",
-   "/hr",
-  "/hr/:path*",
-   "/expenses",
-  "/expenses/:path*",
-  "/shop",
-  "/shop/:path*",
-  "/assets",
-  "/assets/:path*",
-  "/buys",
-  "/buys/:path*",
+// These paths are ALWAYS accessible — no permission check needed
+const ALWAYS_ALLOWED = [
+  "/",
+  "/dashboard",   // ← staff must always reach the dashboard
+  "/api/auth",    // ← OAuth callback chain
 ];
 
-const authorizedRoles = ["admin", "staff"];
+function isAlwaysAllowed(pathname: string): boolean {
+  return ALWAYS_ALLOWED.some(
+    (p) => pathname === p || pathname.startsWith(p + "/")
+  );
+}
+
+function parseRoutes(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw as string[];
+  if (typeof raw === "string") {
+    try { return JSON.parse(raw) as string[]; } catch { return []; }
+  }
+  return [];
+}
 
 export default auth((req) => {
-  const { nextUrl } = req;
-  const session = req.auth;
+  const { pathname } = req.nextUrl;
 
-  // Helper: check if current path matches any protected route (exact or prefix)
-  const isProtected = protectedRoutes.some((route) => {
-    const base = route.replace("/:path*", "");
-    return nextUrl.pathname === base || nextUrl.pathname.startsWith(`${base}/`);
-  });
-
-  if (!isProtected) {
+  // Always pass through static files and Next.js internals
+  if (
+    pathname.startsWith("/_next") ||
+    pathname.startsWith("/favicon") ||
+    pathname.includes(".")
+  ) {
     return NextResponse.next();
   }
 
-  // Case 1: Not authenticated → redirect to login/home with optional "from" tracking
+  // Always-allowed paths need no auth check
+  if (isAlwaysAllowed(pathname)) {
+    return NextResponse.next();
+  }
+
+  // Not signed in → home
+  const session = req.auth;
   if (!session?.user) {
-    const loginUrl = new URL("/", nextUrl); // or "/login" if you move it
-    loginUrl.searchParams.set("from", nextUrl.pathname);
-    return NextResponse.redirect(loginUrl);
+    return NextResponse.redirect(new URL("/", req.url));
   }
 
-  // Case 2: Authenticated but no admin role → FORCE sign-out
- if (!authorizedRoles.includes(session.user.role)){
-    const signOutUrl = new URL("/api/auth/signout", nextUrl.origin);
+  const u             = session.user as { role?: string; allowedRoutes?: unknown };
+  const role          = (u.role ?? "user").toLowerCase().trim();
+  const allowedRoutes = parseRoutes(u.allowedRoutes);
 
-    // After sign-out, try the original protected path again (user will need to pick correct account)
-    signOutUrl.searchParams.set("callbackUrl", nextUrl.pathname + nextUrl.search);
+  // Admin → unrestricted
+  if (role === "admin") return NextResponse.next();
 
-    // Optional: add hint param for UI message on home page
-    // signOutUrl.searchParams.set("reason", "no-access");
-
-    return NextResponse.redirect(signOutUrl);
+  // Non-staff (plain "user" account) → home
+  if (role !== "staff") {
+    return NextResponse.redirect(new URL("/", req.url));
   }
 
-  // Case 3: Good to go
-  return NextResponse.next();
+  // Staff → allow only if pathname starts with one of their allowed prefixes
+  const allowed = allowedRoutes.some(
+    (prefix) => pathname === prefix || pathname.startsWith(prefix + "/")
+  );
+
+  if (allowed) return NextResponse.next();
+
+  // Blocked — back to dashboard with flag (dashboard is always allowed above,
+  // so this can never create a redirect loop)
+  const url = req.nextUrl.clone();
+  url.pathname = "/dashboard";
+  url.searchParams.set("blocked", "1");
+  return NextResponse.redirect(url);
 });
 
 export const config = {
-  matcher: [
-    "/welcome/:path*",
-    "/dashboard/:path*",
-    "/inventory/:path*",
-    "/sales/:path*",
-    "/reports/:path*",
-    "/staff/:path*",
-    "/suppliers/:path*",
-    "/payments/:path*",
-    "/labs/:path*",
-    "/finance/:path*",
-    "/expenses/:path*",
-    "/hr/:path*",
-    "/assets/:path*",
-    "/shop/:path*",
-    "/buys/:path*",
-  ],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\..*).*)"],
 };

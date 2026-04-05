@@ -1,4 +1,4 @@
-// app/sale/quote/_components/actions.ts — convertQuoteToSaleAction updated with credit support
+// app/sale/quote/_components/actions.ts
 "use server";
 
 import { auth } from "@/auth";
@@ -13,12 +13,7 @@ export type ActionResult = { success: boolean; error?: string };
 // ── SELECT SHOP ───────────────────────────────────────────────────────────────
 export async function selectQuoteShopAction(shopId: string) {
   const cookieStore = await cookies();
-  cookieStore.set("active_shop_id", shopId, {
-    path: "/",
-    httpOnly: true,
-    sameSite: "lax",
-    maxAge: 60 * 60 * 24 * 7,
-  });
+  cookieStore.set("active_shop_id", shopId, { path: "/", httpOnly: true, sameSite: "lax", maxAge: 60 * 60 * 24 * 7 });
   redirect("/sale/quote");
 }
 
@@ -37,19 +32,23 @@ const quoteSchema = z.object({
   items: z.array(quoteItemSchema).min(1, "At least one item required"),
 });
 
+const splitSchema = z.object({
+  method: z.string().min(1),
+  amount: z.number().min(0),
+});
+
 const convertSchema = z.object({
   paymentMethod: z.string().min(1, "Payment method required"),
   downPayment: z.number().min(0).default(0),
   dueDate: z.string().optional(),
+  customerName: z.string().optional(),
+  customerContact: z.string().optional(),
+  splits: z.array(splitSchema).default([]),
 });
 
-export async function saveQuoteAction(
-  _: ActionResult,
-  formData: FormData
-): Promise<ActionResult> {
+export async function saveQuoteAction(_: ActionResult, formData: FormData): Promise<ActionResult> {
   const session = await auth();
   if (!session?.user?.id) return { success: false, error: "Unauthorized" };
-
   const userId = session.user.id;
 
   const [staffRecord, profile] = await Promise.all([
@@ -57,11 +56,7 @@ export async function saveQuoteAction(
     prisma.profile.findUnique({ where: { userId }, select: { shopId: true, role: true } }),
   ]);
 
-  if (!staffRecord)
-    return {
-      success: false,
-      error: "Your account is not linked to a staff record. Please contact your administrator.",
-    };
+  if (!staffRecord) return { success: false, error: "Your account is not linked to a staff record." };
 
   const isAdmin = profile?.role?.toLowerCase().trim() === "admin";
   const submittedShopId = formData.get("shopId")?.toString() ?? "";
@@ -69,27 +64,31 @@ export async function saveQuoteAction(
   let resolvedShopId: string;
 
   if (isAdmin) {
-    if (!submittedShopId)
-      return { success: false, error: "No shop selected. Please select a shop first." };
+    // Admins can quote in any shop that exists
+    if (!submittedShopId) return { success: false, error: "No shop selected." };
     const shopExists = await prisma.shop.findUnique({ where: { id: submittedShopId }, select: { id: true } });
     if (!shopExists) return { success: false, error: "Selected shop not found." };
     resolvedShopId = submittedShopId;
   } else {
+    // Non-admin: use the shop assigned via profile or staff record
     resolvedShopId = profile?.shopId ?? staffRecord.shopId ?? "";
-    if (!resolvedShopId)
-      return { success: false, error: "Shop not assigned. Please contact administrator." };
-    const shopBelongsToUser = await prisma.shop.findFirst({ where: { id: resolvedShopId, userId }, select: { id: true } });
-    if (!shopBelongsToUser)
+    if (!resolvedShopId) return { success: false, error: "Shop not assigned." };
+
+    // FIX: Accept access if the user owns the shop OR is a staff member of it
+    const [ownedShop, staffInShop] = await Promise.all([
+      prisma.shop.findFirst({ where: { id: resolvedShopId, userId }, select: { id: true } }),
+      prisma.staff.findFirst({ where: { userId, shopId: resolvedShopId }, select: { id: true } }),
+    ]);
+
+    if (!ownedShop && !staffInShop) {
       return { success: false, error: "You do not have access to this shop." };
+    }
   }
 
   const quoteId = formData.get("quoteId")?.toString() ?? null;
-
   const itemsRaw = formData.get("itemsJson")?.toString();
   let items: z.infer<typeof quoteItemSchema>[] = [];
-  try { items = JSON.parse(itemsRaw ?? "[]"); } catch {
-    return { success: false, error: "Invalid items data" };
-  }
+  try { items = JSON.parse(itemsRaw ?? "[]"); } catch { return { success: false, error: "Invalid items data" }; }
 
   const raw = {
     shopId: resolvedShopId,
@@ -102,24 +101,13 @@ export async function saveQuoteAction(
     const validated = quoteSchema.parse(raw);
 
     for (const item of validated.items) {
-      const product = await prisma.product.findUnique({
-        where: { id: item.productId },
-        select: { quantity: true, productName: true, shopId: true },
-      });
+      const product = await prisma.product.findUnique({ where: { id: item.productId }, select: { quantity: true, productName: true, shopId: true } });
       if (!product) return { success: false, error: "Product not found" };
-      if (product.shopId !== resolvedShopId)
-        return { success: false, error: "Product does not belong to the selected shop" };
-      if (product.quantity < item.quantity)
-        return {
-          success: false,
-          error: `Insufficient stock for "${product.productName}" (available: ${product.quantity})`,
-        };
+      if (product.shopId !== resolvedShopId) return { success: false, error: "Product does not belong to the selected shop" };
+      if (product.quantity < item.quantity) return { success: false, error: `Insufficient stock for "${product.productName}" (available: ${product.quantity})` };
     }
 
-    const totalAmount = validated.items.reduce(
-      (sum, item) => sum + (item.price - item.discount) * item.quantity,
-      0
-    );
+    const totalAmount = validated.items.reduce((sum, item) => sum + (item.price - item.discount) * item.quantity, 0);
     const itemsJson = JSON.stringify(validated.items);
 
     if (quoteId) {
@@ -135,7 +123,7 @@ export async function saveQuoteAction(
             customerContact: validated.customerContact ?? "",
             shopId: validated.shopId,
             quoteItems: {
-              create: validated.items.map((item) => ({
+              create: validated.items.map(item => ({
                 productId: item.productId,
                 quantity: item.quantity,
                 price: item.price,
@@ -155,7 +143,7 @@ export async function saveQuoteAction(
           customerContact: validated.customerContact ?? "",
           shopId: validated.shopId,
           quoteItems: {
-            create: validated.items.map((item) => ({
+            create: validated.items.map(item => ({
               productId: item.productId,
               quantity: item.quantity,
               price: item.price,
@@ -169,8 +157,7 @@ export async function saveQuoteAction(
     revalidatePath("/sale/quote");
     return { success: true };
   } catch (err) {
-    if (err instanceof z.ZodError)
-      return { success: false, error: err.issues[0]?.message ?? "Validation failed" };
+    if (err instanceof z.ZodError) return { success: false, error: err.issues[0]?.message ?? "Validation failed" };
     console.error(err);
     return { success: false, error: quoteId ? "Update failed" : "Create failed" };
   }
@@ -195,18 +182,23 @@ export async function convertQuoteToSaleAction(
   quoteId: string,
   paymentMethod: string,
   downPayment = 0,
-  dueDate?: string
+  dueDate?: string,
+  customerName?: string,
+  customerContact?: string,
+  splits: { method: string; amount: number }[] = []
 ): Promise<ActionResult> {
   const session = await auth();
   if (!session?.user?.id) return { success: false, error: "Unauthorized" };
 
   try {
-    convertSchema.parse({ paymentMethod, downPayment, dueDate });
+    convertSchema.parse({ paymentMethod, downPayment, dueDate, customerName, customerContact, splits });
   } catch {
     return { success: false, error: "Payment method required to convert quote to sale." };
   }
 
-  const isCredit = paymentMethod === "credit";
+  const hasCredit   = paymentMethod === "credit" || splits.some(s => s.method === "credit");
+  const creditSplit = splits.find(s => s.method === "credit");
+  const cashSplits  = splits.filter(s => s.method !== "credit");
 
   try {
     const quote = await prisma.quote.findUnique({
@@ -221,7 +213,6 @@ export async function convertQuoteToSaleAction(
     if (!quote) return { success: false, error: "Quote not found" };
 
     await prisma.$transaction(async (tx) => {
-      // Validate + decrement stock
       for (const item of quote.quoteItems) {
         const product = await tx.product.findUnique({
           where: { id: item.productId },
@@ -229,25 +220,24 @@ export async function convertQuoteToSaleAction(
         });
         if (!product) throw new Error("Product not found");
         if (product.quantity < item.quantity)
-          throw new Error(
-            `Insufficient stock for "${product.productName}" (available: ${product.quantity})`
-          );
+          throw new Error(`Insufficient stock for "${product.productName}" (available: ${product.quantity})`);
         await tx.product.update({
           where: { id: item.productId },
           data: { quantity: { decrement: item.quantity } },
         });
       }
 
-      // Create sale
+      const storedMethod = splits.length > 0 ? splits[0].method : paymentMethod;
+
       const newSale = await tx.sale.create({
         data: {
           soldById: quote.soldById,
           itemsJson: quote.itemsJson,
           totalAmount: quote.amount,
-          paymentMethod,
+          paymentMethod: storedMethod,
           shopId: quote.shopId,
           saleItems: {
-            create: quote.quoteItems.map((item) => ({
+            create: quote.quoteItems.map(item => ({
               productId: item.productId,
               quantity: item.quantity,
               price: item.price,
@@ -257,42 +247,87 @@ export async function convertQuoteToSaleAction(
         },
       });
 
-      if (isCredit) {
-        const effectiveDownPayment = downPayment ?? 0;
-        // Down payment record
-        if (effectiveDownPayment > 0) {
+      const saleCode = newSale.id.slice(-8).toUpperCase();
+
+      if (hasCredit) {
+        const nonCreditPaid =
+          cashSplits.reduce((s, sp) => s + sp.amount, 0) || downPayment;
+
+        for (const sp of cashSplits) {
+          if (sp.amount > 0) {
+            await tx.payment.create({
+              data: {
+                amount: sp.amount,
+                method: sp.method,
+                transactionCode: `PAY-${saleCode}-${sp.method.toUpperCase()}`,
+                shopId: quote.shopId,
+              },
+            });
+          }
+        }
+
+        if (nonCreditPaid > 0 && cashSplits.length === 0 && downPayment > 0) {
           await tx.payment.create({
             data: {
-              amount: effectiveDownPayment,
+              amount: downPayment,
               method: "credit_downpayment",
-              transactionCode: `DP-${newSale.id.slice(-8).toUpperCase()}`,
+              transactionCode: `PAY-${saleCode}-CREDIT_DOWNPAYMENT`,
               shopId: quote.shopId,
             },
           });
         }
-        // Credit tracking
+
+        const creditAmount =
+          creditSplit?.amount ??
+          (splits.length === 0 ? quote.amount - nonCreditPaid : 0);
+        if (creditAmount > 0) {
+          await tx.payment.create({
+            data: {
+              amount: creditAmount,
+              method: "credit",
+              transactionCode: `PAY-${saleCode}-CREDIT`,
+              shopId: quote.shopId,
+            },
+          });
+        }
+
         await tx.credit.create({
           data: {
             amount: quote.amount,
-            downPayment: effectiveDownPayment,
+            downPayment: nonCreditPaid,
             dueDate: dueDate ? new Date(`${dueDate}T00:00:00.000Z`) : null,
-            status: effectiveDownPayment >= quote.amount ? "paid" : effectiveDownPayment > 0 ? "partial" : "pending",
+            status:
+              nonCreditPaid >= quote.amount ? "paid" :
+              nonCreditPaid > 0            ? "partial" : "pending",
+            customerName:  customerName  ?? quote.customerName  ?? null,
+            customerPhone: customerContact ?? null,
             shopId: quote.shopId,
           },
         });
+      } else if (splits.length > 1) {
+        for (const sp of splits) {
+          if (sp.amount > 0) {
+            await tx.payment.create({
+              data: {
+                amount: sp.amount,
+                method: sp.method,
+                transactionCode: `PAY-${saleCode}-${sp.method.toUpperCase()}`,
+                shopId: quote.shopId,
+              },
+            });
+          }
+        }
       } else {
-        // Record full payment
         await tx.payment.create({
           data: {
             amount: quote.amount,
             method: paymentMethod,
-            transactionCode: `PAY-${newSale.id.slice(-8).toUpperCase()}`,
+            transactionCode: `PAY-${saleCode}`,
             shopId: quote.shopId,
           },
         });
       }
 
-      // Delete quote
       await tx.quoteItem.deleteMany({ where: { quoteId } });
       await tx.quote.delete({ where: { id: quoteId } });
     });

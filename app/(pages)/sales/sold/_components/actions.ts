@@ -19,11 +19,17 @@ const saleItemSchema = z.object({
   discount: z.number().default(0),
 });
 
+const paymentSplitSchema = z.object({
+  id: z.string(),
+  method: z.string().min(1),
+  amount: z.number().min(0),
+});
+
 const saleSchema = z.object({
   paymentMethod: z.string().min(1, "Payment method required"),
   shopId: z.string().min(1, "Shop required"),
   items: z.array(saleItemSchema).min(1, "At least one item required"),
-  // Credit fields (only required when paymentMethod === "credit")
+  splits: z.array(paymentSplitSchema).default([]),
   downPayment: z.number().min(0).default(0),
   dueDate: z.string().optional(),
   customerName: z.string().optional(),
@@ -45,78 +51,75 @@ export async function createSaleAction(
   ]);
 
   if (!staffRecord)
-    return {
-      success: false,
-      error: "Your account is not linked to a staff record. Please contact your administrator.",
-    };
+    return { success: false, error: "Your account is not linked to a staff record. Please contact your administrator." };
 
   const isAdmin = profile?.role?.toLowerCase().trim() === "admin";
-
   const resolvedShopId =
-    profile?.shopId ??
-    staffRecord.shopId ??
-    (isAdmin ? formData.get("shopId")?.toString() ?? "" : "");
+    profile?.shopId ?? staffRecord.shopId ?? (isAdmin ? (formData.get("shopId")?.toString() ?? "") : "");
 
   if (!resolvedShopId)
     return { success: false, error: "Shop not assigned. Please contact administrator." };
 
   const itemsRaw = formData.get("itemsJson")?.toString();
   let items: z.infer<typeof saleItemSchema>[] = [];
-  try {
-    items = JSON.parse(itemsRaw ?? "[]");
-  } catch {
-    return { success: false, error: "Invalid items data" };
-  }
+  try { items = JSON.parse(itemsRaw ?? "[]"); } catch { return { success: false, error: "Invalid items data" }; }
+
+  const splitsRaw = formData.get("splitsJson")?.toString();
+  let splits: z.infer<typeof paymentSplitSchema>[] = [];
+  try { splits = JSON.parse(splitsRaw ?? "[]"); } catch { splits = []; }
+
+  const customerName    = formData.get("customerName")?.toString()    || undefined;
+  const customerContact = formData.get("customerContact")?.toString() || undefined;
 
   const raw = {
     paymentMethod: formData.get("paymentMethod")?.toString() ?? "",
     shopId: resolvedShopId,
     items,
+    splits,
     downPayment: Number(formData.get("downPayment") || 0),
     dueDate: formData.get("dueDate")?.toString() || undefined,
-    customerName: formData.get("customerName")?.toString() || undefined,
-    customerContact: formData.get("customerContact")?.toString() || undefined,
+    customerName,
+    customerContact,
   };
 
   try {
     const validated = saleSchema.parse(raw);
-
     const totalAmount = validated.items.reduce(
-      (sum, item) => sum + (item.price - item.discount) * item.quantity,
-      0
+      (sum, item) => sum + (item.price - item.discount) * item.quantity, 0
     );
-
     const itemsJson = JSON.stringify(validated.items);
-    const isCredit = validated.paymentMethod === "credit";
+
+    const creditSplit = validated.splits.find(s => s.method === "credit");
+    const isCredit    = validated.paymentMethod === "credit" || Boolean(creditSplit);
+    const cashSplits  = validated.splits.filter(s => s.method !== "credit");
 
     const sale = await prisma.$transaction(async (tx) => {
-      // Validate stock and decrement
       for (const item of validated.items) {
         const product = await tx.product.findUnique({
           where: { id: item.productId },
           select: { quantity: true, productName: true },
         });
-        if (!product) throw new Error(`Product not found`);
+        if (!product) throw new Error("Product not found");
         if (product.quantity < item.quantity)
-          throw new Error(
-            `Insufficient stock for "${product.productName}" (available: ${product.quantity})`
-          );
+          throw new Error(`Insufficient stock for "${product.productName}" (available: ${product.quantity})`);
         await tx.product.update({
           where: { id: item.productId },
           data: { quantity: { decrement: item.quantity } },
         });
       }
 
-      // Create the sale
+      const storedMethod =
+        validated.splits.length > 0 ? validated.splits[0].method : validated.paymentMethod;
+
       const newSale = await tx.sale.create({
         data: {
           soldById: staffRecord.id,
           itemsJson,
           totalAmount,
-          paymentMethod: validated.paymentMethod,
+          paymentMethod: storedMethod,
           shopId: validated.shopId,
           saleItems: {
-            create: validated.items.map((item) => ({
+            create: validated.items.map(item => ({
               productId: item.productId,
               quantity: item.quantity,
               price: item.price,
@@ -126,39 +129,87 @@ export async function createSaleAction(
         },
       });
 
-      // If credit: record down payment as a Payment, create Credit record for balance
-      if (isCredit) {
-        const creditAmount = totalAmount - validated.downPayment;
+      const saleCode = newSale.id.slice(-8).toUpperCase();
 
-        // Record down payment if any
-        if (validated.downPayment > 0) {
+      if (isCredit) {
+        const nonCreditPaid =
+          cashSplits.reduce((s, sp) => s + sp.amount, 0) || validated.downPayment;
+
+        // All non-credit splits → individual Payment rows
+        for (const sp of cashSplits) {
+          if (sp.amount > 0) {
+            await tx.payment.create({
+              data: {
+                amount: sp.amount,
+                method: sp.method,
+                transactionCode: `PAY-${saleCode}-${sp.method.toUpperCase()}`,
+                shopId: validated.shopId,
+              },
+            });
+          }
+        }
+
+        // Legacy single down-payment path
+        if (nonCreditPaid > 0 && cashSplits.length === 0 && validated.downPayment > 0) {
           await tx.payment.create({
             data: {
               amount: validated.downPayment,
               method: "credit_downpayment",
-              transactionCode: `DP-${newSale.id.slice(-8).toUpperCase()}`,
+              transactionCode: `PAY-${saleCode}-CREDIT_DOWNPAYMENT`,
               shopId: validated.shopId,
             },
           });
         }
 
-        // Create credit tracking record
+        // Credit leg → Payment row so it appears in the payment breakdown stack
+        const creditAmount =
+          creditSplit?.amount ??
+          (validated.splits.length === 0 ? totalAmount - nonCreditPaid : 0);
+        if (creditAmount > 0) {
+          await tx.payment.create({
+            data: {
+              amount: creditAmount,
+              method: "credit",
+              transactionCode: `PAY-${saleCode}-CREDIT`,
+              shopId: validated.shopId,
+            },
+          });
+        }
+
         await tx.credit.create({
           data: {
             amount: totalAmount,
-            downPayment: validated.downPayment,
+            downPayment: nonCreditPaid,
             dueDate: validated.dueDate ? new Date(`${validated.dueDate}T00:00:00.000Z`) : null,
-            status: validated.downPayment >= totalAmount ? "paid" : validated.downPayment > 0 ? "partial" : "pending",
+            status:
+              nonCreditPaid >= totalAmount ? "paid" :
+              nonCreditPaid > 0           ? "partial" : "pending",
+            customerName:  customerName  ?? null,
+            customerPhone: customerContact ?? null,
             shopId: validated.shopId,
           },
         });
+      } else if (validated.splits.length > 1) {
+        // Multiple non-credit splits
+        for (const sp of validated.splits) {
+          if (sp.amount > 0) {
+            await tx.payment.create({
+              data: {
+                amount: sp.amount,
+                method: sp.method,
+                transactionCode: `PAY-${saleCode}-${sp.method.toUpperCase()}`,
+                shopId: validated.shopId,
+              },
+            });
+          }
+        }
       } else {
-        // Non-credit: record full payment
+        // Single non-credit payment
         await tx.payment.create({
           data: {
             amount: totalAmount,
             method: validated.paymentMethod,
-            transactionCode: `PAY-${newSale.id.slice(-8).toUpperCase()}`,
+            transactionCode: `PAY-${saleCode}`,
             shopId: validated.shopId,
           },
         });

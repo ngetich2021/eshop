@@ -10,46 +10,34 @@ export default async function CreditPage() {
   const session = await auth();
   if (!session?.user?.id)
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        Please sign in
-      </div>
+      <div className="min-h-screen flex items-center justify-center">Please sign in</div>
     );
 
   const userId = session.user.id;
   const { activeShopId, activeShop, isAdmin } = await resolveActiveShop(userId);
 
-  const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const startOfWeek = new Date(startOfDay);
+  const now          = new Date();
+  const startOfDay   = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfWeek  = new Date(startOfDay);
   startOfWeek.setDate(startOfDay.getDate() - startOfDay.getDay());
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const startOfYear = new Date(now.getFullYear(), 0, 1);
+  const startOfYear  = new Date(now.getFullYear(), 0, 1);
 
   const shopFilter = { shopId: activeShopId };
 
-  const [raw, todayAgg, weekAgg, monthAgg, yearAgg] = await Promise.all([
+  // Also fetch Payment records so we can reconstruct which methods were used at sale time
+  const [raw, todayAgg, weekAgg, monthAgg, yearAgg, salePaymentsRaw] = await Promise.all([
     prisma.credit.findMany({
       where: shopFilter,
       select: {
-        id: true,
-        amount: true,
-        downPayment: true,
-        dueDate: true,
-        status: true,
-        shopId: true,
-        customerName: true,
-        customerPhone: true,
+        id: true, amount: true, downPayment: true, dueDate: true, status: true,
+        shopId: true, customerName: true, customerPhone: true,
         shop: { select: { name: true } },
         createdAt: true,
         creditPayments: {
           select: {
-            id: true,
-            amount: true,
-            method: true,
-            note: true,
-            dueDate: true,
-            paidAt: true,
-            createdAt: true,
+            id: true, amount: true, method: true, note: true, dueDate: true,
+            paidAt: true, createdAt: true,
           },
           orderBy: { paidAt: "asc" },
         },
@@ -58,30 +46,70 @@ export default async function CreditPage() {
     }),
     prisma.credit.aggregate({
       where: { ...shopFilter, createdAt: { gte: startOfDay } },
-      _sum: { amount: true, downPayment: true },
-      _count: true,
+      _sum: { amount: true, downPayment: true }, _count: true,
     }),
     prisma.credit.aggregate({
       where: { ...shopFilter, createdAt: { gte: startOfWeek } },
-      _sum: { amount: true, downPayment: true },
-      _count: true,
+      _sum: { amount: true, downPayment: true }, _count: true,
     }),
     prisma.credit.aggregate({
       where: { ...shopFilter, createdAt: { gte: startOfMonth } },
-      _sum: { amount: true, downPayment: true },
-      _count: true,
+      _sum: { amount: true, downPayment: true }, _count: true,
     }),
     prisma.credit.aggregate({
       where: { ...shopFilter, createdAt: { gte: startOfYear } },
-      _sum: { amount: true, downPayment: true },
-      _count: true,
+      _sum: { amount: true, downPayment: true }, _count: true,
+    }),
+    // Payment records that are down-payment / split legs from sales
+    // These have transactionCode starting with "PAY-" or "DP-"
+    prisma.payment.findMany({
+      where: {
+        shopId: activeShopId,
+        transactionCode: { not: null },
+      },
+      select: {
+        id: true, amount: true, method: true, transactionCode: true, createdAt: true,
+      },
     }),
   ]);
+
+  // For each credit, we want to find the Payment records that correspond to the
+  // non-credit splits at sale time. Credits are created in the same transaction
+  // as the Sale. We match by creation time (within same second) and by the
+  // downPayment amount == sum of matching PAY- records.
+  // 
+  // Since we don't have a direct saleId → creditId link, we match by:
+  //   - shopId ✓ (already filtered)
+  //   - createdAt within a 5-second window of the credit
+  //   - sum of PAY- amounts == credit.downPayment
+  //
+  // This is a best-effort heuristic — it works because credits and payments are
+  // created atomically in the same DB transaction.
 
   const credits = raw.map((c) => {
     const extraPaid = c.creditPayments.reduce((s, p) => s + p.amount, 0);
     const totalPaid = c.downPayment + extraPaid;
     const due = Math.max(0, c.amount - totalPaid);
+    const creditCreatedAt = c.createdAt.getTime();
+
+    // Find Payment records created within 5 seconds of this credit creation
+    // that are non-credit-downpayment legs (i.e., the actual cash/mpesa/bank splits)
+    const saleLegPayments = salePaymentsRaw.filter(p => {
+      const tc = p.transactionCode ?? "";
+      if (!tc.startsWith("PAY-")) return false;
+      const diffMs = Math.abs(p.createdAt.getTime() - creditCreatedAt);
+      return diffMs < 5000; // within 5 seconds = same transaction
+    });
+
+    // Build saleLegs only if we found matching payments AND their sum ≈ downPayment
+    const saleLegsSum = saleLegPayments.reduce((s, p) => s + p.amount, 0);
+    const saleLegs = (saleLegPayments.length > 0 && Math.abs(saleLegsSum - c.downPayment) < 1)
+      ? saleLegPayments.map(p => ({
+          method: p.method,
+          amount: p.amount,
+          date: p.createdAt.toISOString().split("T")[0],
+        }))
+      : [];
 
     return {
       id: c.id,
@@ -96,6 +124,7 @@ export default async function CreditPage() {
       customerName: c.customerName ?? null,
       customerPhone: c.customerPhone ?? null,
       date: c.createdAt.toISOString().split("T")[0],
+      saleLegs,
       payments: c.creditPayments.map((p) => ({
         id: p.id,
         amount: p.amount,
@@ -114,7 +143,7 @@ export default async function CreditPage() {
     due: (agg._sum.amount ?? 0) - (agg._sum.downPayment ?? 0),
   });
 
-  const totalAdded = credits.reduce((s, c) => s + c.amount, 0);
+  const totalAdded   = credits.reduce((s, c) => s + c.amount, 0);
   const totalPaidAll = credits.reduce((s, c) => s + c.totalPaid, 0);
 
   return (
@@ -123,9 +152,9 @@ export default async function CreditPage() {
       isAdmin={isAdmin}
       stats={{
         today: mkStat(todayAgg),
-        week: mkStat(weekAgg),
+        week:  mkStat(weekAgg),
         month: mkStat(monthAgg),
-        year: mkStat(yearAgg),
+        year:  mkStat(yearAgg),
         total: {
           count: credits.length,
           added: totalAdded,

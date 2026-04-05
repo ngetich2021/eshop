@@ -1,6 +1,16 @@
+// app/hr/staff/page.tsx
 import { auth } from "@/auth";
 import prisma from "@/lib/prisma";
 import StaffsView from "./_components/StaffsView";
+import { resolveActiveShop } from "@/lib/active-shop";
+
+function parseRoutes(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw as string[];
+  if (typeof raw === "string") {
+    try { return JSON.parse(raw) as string[]; } catch { return []; }
+  }
+  return [];
+}
 
 export default async function StaffPage() {
   const session = await auth();
@@ -13,19 +23,10 @@ export default async function StaffPage() {
   }
 
   const userId = session.user.id;
-  const profile = await prisma.profile.findUnique({
-    where: { userId },
-    select: { role: true },
-  });
-  const isAdmin = profile?.role?.toLowerCase().trim() === "admin";
+  const { activeShopId, activeShop, isAdmin } = await resolveActiveShop(userId);
 
-  // ── USERS WITH ROLE = 'user' AND NOT ALREADY REGISTERED AS STAFF ──
-  // This is the exact change you asked for — no already-registered user appears in dropdown
   const usersRaw = await prisma.user.findMany({
-    where: {
-      profile: { role: "user" },
-      staff: null,                    // ← EXCLUDES ANY USER ALREADY IN STAFF TABLE
-    },
+    where: { profile: { role: "user" }, staff: null },
     select: {
       id: true,
       name: true,
@@ -41,17 +42,8 @@ export default async function StaffPage() {
     email: u.email || undefined,
   }));
 
-  // SHOPS FOR SELECTION (unchanged)
-  const shopsRaw = await prisma.shop.findMany({
-    select: { id: true, name: true },
-    orderBy: { name: "asc" },
-  });
-
-  const shops = shopsRaw.map((s) => ({ id: s.id, name: s.name }));
-
-  // STAFF LIST (unchanged — includes already registered staff)
   const staffListRaw = await prisma.staff.findMany({
-    where: isAdmin ? undefined : { shop: { userId } },
+    where: { shopId: activeShopId },
     select: {
       id: true,
       userId: true,
@@ -63,6 +55,17 @@ export default async function StaffPage() {
       createdAt: true,
       shopId: true,
       shop: { select: { name: true } },
+      user: {
+        select: {
+          profile: {
+            select: {
+              role: true,
+              designation: true,
+              allowedRoutes: true,
+            },
+          },
+        },
+      },
     },
     orderBy: { createdAt: "desc" },
   });
@@ -78,17 +81,31 @@ export default async function StaffPage() {
     date: s.createdAt.toISOString().split("T")[0],
     shop: s.shop?.name ?? "—",
     shopId: s.shopId,
+    role: s.user?.profile?.role ?? "staff",
+    designation: s.user?.profile?.designation ?? null,
+    allowedRoutes: parseRoutes((s.user?.profile as { allowedRoutes?: unknown })?.allowedRoutes),
   }));
 
-  const totalStaff = staffList.length;
+  const totalStaff  = staffList.length;
   const totalSalary = staffList.reduce((sum, s) => sum + s.baseSalary, 0);
+
+  const rolesRaw = await prisma.role.findMany({ orderBy: { createdAt: "asc" } });
+  const roles = rolesRaw.map((r) => ({
+    id: r.id,
+    name: r.name,
+    description: r.description,
+    allowedRoutes: parseRoutes((r as { allowedRoutes?: unknown }).allowedRoutes),
+  }));
 
   return (
     <StaffsView
       stats={{ totalStaff, totalSalary }}
       staffList={staffList}
       users={users}
-      shops={shops}
+      activeShopId={activeShopId}
+      activeShopName={activeShop.name}
+      isAdmin={isAdmin}
+      roles={roles}
     />
   );
 }

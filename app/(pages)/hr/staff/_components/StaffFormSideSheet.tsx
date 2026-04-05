@@ -1,15 +1,13 @@
 "use client";
 
 import { ArrowLeft, Loader2, Eye } from "lucide-react";
-import { useState, useRef, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useRef } from "react";
 import { useActionState } from "react";
 import { saveStaffAction } from "./actions";
 
 type ActionResult = { success: boolean; error?: string };
 
 type UserOption = { id: string; fullName: string; email?: string };
-type ShopOption = { id: string; name: string };
 
 type StaffToEdit = {
   id: string;
@@ -28,74 +26,78 @@ type Props = {
   mode: Mode;
   staffToEdit?: StaffToEdit | null;
   users: UserOption[];
-  shops: ShopOption[];
+  activeShopId: string;
+  activeShopName: string;
   onSuccess: () => void;
   onClose: () => void;
 };
 
-export default function StaffFormSideSheet({
-  mode,
-  staffToEdit,
-  users,
-  shops,
-  onSuccess,
-  onClose,
-}: Props) {
-  const router = useRouter();
-  const formRef = useRef<HTMLFormElement>(null);
-  const isView = mode === "view";
-  const isEdit = mode === "edit";
+const initialState: ActionResult = { success: false };
 
+export default function StaffFormSideSheet({
+  mode, staffToEdit, users, activeShopId, activeShopName, onSuccess, onClose,
+}: Props) {
+  const formRef = useRef<HTMLFormElement>(null);
+  const isView  = mode === "view";
+  const isEdit  = mode === "edit";
+
+  // Pass saveStaffAction directly — no anonymous async wrapper (Turbopack fix)
   const [state, submitAction, isPending] = useActionState<ActionResult, FormData>(
-    async (prev, formData) => await saveStaffAction(prev, formData),
-    { success: false }
+    saveStaffAction,
+    initialState
   );
 
   useEffect(() => {
     if (state?.success) onSuccess();
   }, [state?.success, onSuccess]);
 
+  const fieldCls = (extra = "") =>
+    `w-full border border-gray-300 rounded-2xl px-5 py-3.5 text-base ${
+      isView ? "bg-gray-50 cursor-not-allowed text-gray-600" : "focus:border-green-500 outline-none"
+    } ${extra}`;
+
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex justify-end">
-      {/* Side sheet container — exact responsive widths from PDF */}
       <div className="w-full max-w-[380px] md:max-w-[520px] lg:max-w-[680px] h-full bg-white shadow-2xl flex flex-col overflow-hidden">
-        
-        {/* Header — matches PDF on all devices */}
+
+        {/* Header */}
         <div className="flex items-center gap-4 border-b px-6 py-5">
-          <button onClick={onClose} className="p-2 rounded-full hover:bg-gray-100">
+          <button type="button" onClick={onClose} className="p-2 rounded-full hover:bg-gray-100">
             <ArrowLeft size={26} />
           </button>
-          <h2 className="text-2xl font-semibold flex items-center gap-3">
-            {isView ? (
-              <>
-                <Eye size={28} className="text-gray-600" /> View Staff
-              </>
-            ) : isEdit ? (
-              "Edit Staff"
-            ) : (
-              "Add Staff"
-            )}
-          </h2>
+          <div>
+            <h2 className="text-2xl font-semibold flex items-center gap-3">
+              {isView ? <><Eye size={24} className="text-gray-500" /> View Staff</> :
+               isEdit ? "Edit Staff" : "Add Staff"}
+            </h2>
+            <p className="text-sm text-gray-500 mt-0.5">
+              Shop: <span className="font-medium text-gray-700">{activeShopName}</span>
+            </p>
+          </div>
         </div>
 
         <form
           ref={formRef}
           action={submitAction}
-          className="flex-1 overflow-y-auto p-6 md:p-8 lg:p-10 space-y-8"
+          className="flex-1 overflow-y-auto p-6 md:p-8 lg:p-10 space-y-7"
         >
+          {/* Hidden fields */}
           {staffToEdit?.id && <input type="hidden" name="staffId" value={staffToEdit.id} />}
+          <input type="hidden" name="shopId" value={activeShopId} />
 
           {state?.error && (
-            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-2xl text-center font-medium">
+            <div className="bg-red-50 border border-red-300 text-red-700 px-4 py-3 rounded-2xl text-sm font-medium">
               {state.error}
             </div>
           )}
 
-          {/* USER (disabled on edit — exact PDF behavior) */}
+          {/* USER — disabled on edit/view */}
           <div>
-            <label className="block mb-1.5 text-sm font-medium text-gray-700">User (role = user):</label>
+            <label className="block mb-1.5 text-sm font-medium text-gray-700">
+              User <span className="text-gray-400 font-normal">(role will become staff)</span>
+            </label>
             {isEdit ? (
-              <div className="w-full border border-gray-300 rounded-2xl px-5 py-3.5 bg-gray-50 text-gray-600 text-base">
+              <div className={fieldCls()}>
                 {users.find((u) => u.id === staffToEdit?.userId)?.fullName || "Current User"}
                 <input type="hidden" name="userId" value={staffToEdit?.userId} />
               </div>
@@ -105,117 +107,103 @@ export default function StaffFormSideSheet({
                 defaultValue={staffToEdit?.userId || ""}
                 required
                 disabled={isView}
-                className={`w-full border border-gray-300 rounded-2xl px-5 py-3.5 text-base ${isView ? "bg-gray-50 cursor-not-allowed" : ""}`}
+                className={fieldCls()}
               >
-                <option value="">Select user</option>
+                <option value="">Select user…</option>
                 {users.map((u) => (
                   <option key={u.id} value={u.id}>
-                    {u.fullName} {u.email ? `(${u.email})` : ""}
+                    {u.fullName}{u.email ? ` (${u.email})` : ""}
                   </option>
                 ))}
               </select>
             )}
           </div>
 
-          {/* SHOP */}
-          <div>
-            <label className="block mb-1.5 text-sm font-medium text-gray-700">Shop:</label>
-            <select
-              name="shopId"
-              defaultValue={staffToEdit?.shopId || ""}
-              required
-              disabled={isView}
-              className={`w-full border border-gray-300 rounded-2xl px-5 py-3.5 text-base ${isView ? "bg-gray-50 cursor-not-allowed" : ""}`}
-            >
-              <option value="">Select shop</option>
-              {shops.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
           {/* FULL NAME */}
           <div>
-            <label className="block mb-1.5 text-sm font-medium text-gray-700">Full Name:</label>
+            <label className="block mb-1.5 text-sm font-medium text-gray-700">Full Name</label>
             <input
               name="fullName"
               defaultValue={staffToEdit?.fullName || ""}
               required
               readOnly={isView}
-              className={`w-full border border-gray-300 rounded-2xl px-5 py-3.5 text-base ${isView ? "bg-gray-50 cursor-not-allowed" : ""}`}
+              className={fieldCls()}
             />
           </div>
 
-          {/* TEL 1 + TEL 2 — 2-column on tablet/desktop, stacked on mobile (exact PDF) */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* TEL 1 + TEL 2 */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <div>
-              <label className="block mb-1.5 text-sm font-medium text-gray-700">Tel 1 (Kenyan):</label>
+              <label className="block mb-1.5 text-sm font-medium text-gray-700">Tel 1</label>
               <input
                 name="tel1"
                 defaultValue={staffToEdit?.tel1 || ""}
                 required
                 readOnly={isView}
-                className={`w-full border border-gray-300 rounded-2xl px-5 py-3.5 text-base ${isView ? "bg-gray-50 cursor-not-allowed" : ""}`}
+                placeholder="07xxxxxxxx"
+                className={fieldCls()}
               />
             </div>
             <div>
-              <label className="block mb-1.5 text-sm font-medium text-gray-700">Tel 2 (optional):</label>
+              <label className="block mb-1.5 text-sm font-medium text-gray-700">
+                Tel 2 <span className="text-gray-400">(optional)</span>
+              </label>
               <input
                 name="tel2"
                 defaultValue={staffToEdit?.tel2 || ""}
                 readOnly={isView}
-                className={`w-full border border-gray-300 rounded-2xl px-5 py-3.5 text-base ${isView ? "bg-gray-50 cursor-not-allowed" : ""}`}
+                placeholder="07xxxxxxxx"
+                className={fieldCls()}
               />
             </div>
           </div>
 
-          {/* MPESA + BASE SALARY — 2-column on tablet/desktop */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* MPESA + BASE SALARY */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <div>
               <label className="block mb-1.5 text-sm font-medium text-gray-700">
-                M-Pesa Registered Tel No: (for receiving money)
+                M-Pesa No <span className="text-gray-400 font-normal text-xs">(for payments)</span>
               </label>
               <input
                 name="mpesaNo"
                 defaultValue={staffToEdit?.mpesaNo || ""}
                 required
                 readOnly={isView}
-                className={`w-full border border-gray-300 rounded-2xl px-5 py-3.5 text-base ${isView ? "bg-gray-50 cursor-not-allowed" : ""}`}
+                placeholder="07xxxxxxxx"
+                className={fieldCls()}
               />
             </div>
             <div>
-              <label className="block mb-1.5 text-sm font-medium text-gray-700">Base Salary (KSh):</label>
+              <label className="block mb-1.5 text-sm font-medium text-gray-700">
+                Base Salary (KSh)
+              </label>
               <input
                 name="baseSalary"
                 type="number"
-                defaultValue={staffToEdit?.baseSalary || 0}
+                defaultValue={staffToEdit?.baseSalary ?? 0}
                 min="0"
                 required
                 readOnly={isView}
-                className={`w-full border border-gray-300 rounded-2xl px-5 py-3.5 text-base ${isView ? "bg-gray-50 cursor-not-allowed" : ""}`}
+                className={fieldCls()}
               />
             </div>
           </div>
 
-          {/* GREEN SUBMIT BUTTON — exact position & style from PDF */}
+          {/* Shop display (read-only info) */}
+          <div>
+            <label className="block mb-1.5 text-sm font-medium text-gray-700">Shop</label>
+            <div className={fieldCls()}>{activeShopName}</div>
+          </div>
+
           {!isView && (
             <button
               type="submit"
               disabled={isPending}
-              className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white py-4 text-xl font-semibold rounded-2xl mt-8 transition-colors flex items-center justify-center gap-2"
+              className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white py-4 text-lg font-semibold rounded-2xl mt-4 transition-colors flex items-center justify-center gap-2"
             >
-              {isPending ? (
-                <>
-                  <Loader2 size={24} className="animate-spin" />
-                  Saving...
-                </>
-              ) : isEdit ? (
-                "Update Staff"
-              ) : (
-                "Add Staff"
-              )}
+              {isPending
+                ? <><Loader2 size={22} className="animate-spin" /> Saving…</>
+                : isEdit ? "Update Staff" : "Add Staff"}
             </button>
           )}
         </form>

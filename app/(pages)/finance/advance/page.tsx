@@ -26,12 +26,6 @@ export default async function AdvancePage() {
   });
   const isStaff = !!currentStaff && !isManager;
 
-  const staffList = await prisma.staff.findMany({
-    where: { shopId: activeShopId },
-    select: { id: true, fullName: true, baseSalary: true },
-    orderBy: { fullName: "asc" },
-  });
-
   // Managers see ALL advances for the shop; staff see only their own
   const raw = await prisma.advance.findMany({
     where: {
@@ -84,7 +78,6 @@ export default async function AdvancePage() {
       currentStaff={currentStaff}
       stats={{ totalAdvances: advances.length, totalAdvance, pendingAdvance, approvedCount }}
       advances={advances}
-      staffList={staffList}
     />
   );
 }

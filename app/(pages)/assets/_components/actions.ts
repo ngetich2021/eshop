@@ -6,6 +6,7 @@ import prisma from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import * as z from "zod";
 import crypto from "crypto";
+import { logActivity } from "@/lib/log-activity";
 
 export type ActionResult = { success: boolean; error?: string };
 
@@ -98,8 +99,10 @@ export async function saveAssetAction(
 
     if (assetId) {
       await prisma.asset.update({ where: { id: assetId }, data });
+      await logActivity(session.user.id, "/assets", "PUT");
     } else {
       await prisma.asset.create({ data });
+       await logActivity(session.user.id, "/assets", "POST");
     }
     revalidatePath("/assets");
     return { success: true };
@@ -115,6 +118,7 @@ export async function deleteAssetAction(id: string): Promise<ActionResult> {
   if (!session?.user?.id) return { success: false, error: "Unauthorized" };
   try {
     await prisma.asset.delete({ where: { id } });
+    await logActivity(session.user.id, "/assets", "DELETE");
     revalidatePath("/assets");
     return { success: true };
   } catch {

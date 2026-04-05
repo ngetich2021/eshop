@@ -1,90 +1,106 @@
-// src/auth.ts
-import NextAuth from "next-auth";
-import Google from "next-auth/providers/google";
+// auth.ts  (project root)
+// strategy:"database" means the session callback runs on EVERY request that
+// reads the session, so role/shopId/allowedRoutes are always fresh from the DB.
+import NextAuth          from "next-auth";
+import Google            from "next-auth/providers/google";
 import { PrismaAdapter } from "@auth/prisma-adapter";
-import prisma from "@/lib/prisma";
+import prisma            from "@/lib/prisma";
 
-// Extend NextAuth types
-declare module "next-auth" {
-  interface Session {
-    user: {
-      id: string;
-      name?: string | null;
-      email?: string | null;
-      image?: string | null;
-      role: string;
-    };
+function parseRoutes(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw as string[];
+  if (typeof raw === "string") {
+    try { return JSON.parse(raw) as string[]; } catch { return []; }
   }
-
-  interface User {
-    id: string;
-  }
-}
-
-declare module "next-auth/jwt" {
-  interface JWT {
-    role?: string;
-  }
+  return [];
 }
 
 export const { auth, handlers, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(prisma as unknown as Parameters<typeof PrismaAdapter>[0]),
   providers: [
     Google({
-      clientId: process.env.GOOGLE_CLIENT_ID!,
+      clientId:     process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
     }),
   ],
-
+  session: {
+    strategy: "database",
+    maxAge:   60 * 60 * 8, // 8 hours
+  },
+  cookies: {
+    sessionToken: {
+      name: "next-auth.session-token",
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path:     "/",
+        secure:   process.env.NODE_ENV === "production",
+      },
+    },
+  },
   events: {
     async createUser({ user }) {
       if (!user.id) return;
-
       await prisma.profile.upsert({
-        where: { userId: user.id },
-        update: {
-          email: user.email ?? null, // Sync email on first creation (in case of future changes)
-        },
-        create: {
-          userId: user.id,
-          role: "user",
-          email: user.email ?? null, // Copy email at creation time
-        },
+        where:  { userId: user.id },
+        update: { email: user.email ?? null },
+        create: { userId: user.id, role: "user", email: user.email ?? null },
       });
-
-      console.log("🔥 New user profile created with email sync:", user.id);
+    },
+    async signIn({ user }) {
+      if (!user.id) return;
+      await prisma.loginLog.create({
+        data: { userId: user.id, loginTime: new Date(), lastSeen: new Date(), duration: 0 },
+      });
+      await prisma.profile.upsert({
+        where:  { userId: user.id },
+        update: { email: user.email ?? null },
+        create: { userId: user.id, role: "user", email: user.email ?? null },
+      });
     },
   },
-
   callbacks: {
     async session({ session, user }) {
       if (!user?.id || !session.user) return session;
 
-      // Upsert profile to ensure it exists and email is always in sync
-      const profile = await prisma.profile.upsert({
-        where: { userId: user.id },
-        update: {
-          email: user.email ?? null, // Keep profile.email in sync whenever session is fetched
-        },
-        create: {
-          userId: user.id,
-          role: "user",
-          email: user.email ?? null,
-        },
+      // Fresh read every time — designation / allowedRoutes / shopId changes
+      // in the admin panel take effect on the staff member's very next request.
+      const profile = await prisma.profile.findUnique({
+        where:  { userId: user.id },
         select: {
-          role: true,
-          email: true, // optional: if you want to use profile.email instead
+          role:          true,
+          designation:   true,
+          allowedRoutes: true,
+          shopId:        true,
         },
       });
 
-      // Attach required fields to session
-      session.user.id = user.id;
-      session.user.role = profile.role ?? "user";
+      // Keep login duration fresh
+      const latestLog = await prisma.loginLog.findFirst({
+        where:   { userId: user.id },
+        orderBy: { loginTime: "desc" },
+      });
+      if (latestLog) {
+        const now = new Date();
+        await prisma.loginLog.update({
+          where: { id: latestLog.id },
+          data: {
+            lastSeen: now,
+            duration: Math.floor(
+              (now.getTime() - latestLog.loginTime.getTime()) / 1000
+            ),
+          },
+        });
+      }
 
-      // Use the freshest data: prefer user table (updated by provider), fallback to session
-      session.user.email = user.email ?? session.user.email;
-      session.user.name = user.name ?? session.user.name;
-      session.user.image = user.image ?? session.user.image;
+      session.user.id            = user.id;
+      session.user.role          = profile?.role        ?? "user";
+      session.user.designation   = profile?.designation ?? null;
+      session.user.shopId        = profile?.shopId      ?? null;
+      // allowedRoutes is String[] in Prisma — parseRoutes handles both
+      // native arrays (from Prisma) and JSON strings (legacy data)
+      session.user.allowedRoutes = parseRoutes(
+        (profile as { allowedRoutes?: unknown })?.allowedRoutes
+      );
 
       return session;
     },
